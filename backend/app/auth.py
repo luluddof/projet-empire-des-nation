@@ -16,20 +16,30 @@ def build_discord_authorize_url():
     return f"https://discord.com/api/oauth2/authorize?{urlencode(params)}"
 
 
+class DiscordTokenError(Exception):
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self.body = body
+        super().__init__(f"Discord {status_code}: {body}")
+
+
 def exchange_code_for_token(code):
+    data = {
+        "client_id": current_app.config["DISCORD_CLIENT_ID"],
+        "client_secret": current_app.config["DISCORD_CLIENT_SECRET"],
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": current_app.config["DISCORD_REDIRECT_URI"],
+    }
+    current_app.logger.info("Token exchange with client_id=%s", data["client_id"])
     response = requests.post(
         "https://discord.com/api/oauth2/token",
-        data={
-            "client_id": current_app.config["DISCORD_CLIENT_ID"],
-            "client_secret": current_app.config["DISCORD_CLIENT_SECRET"],
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": current_app.config["DISCORD_REDIRECT_URI"],
-        },
+        data=data,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         timeout=10,
     )
-    response.raise_for_status()
+    if not response.ok:
+        raise DiscordTokenError(response.status_code, response.text)
     payload = response.json()
     return payload["access_token"]
 
@@ -64,11 +74,18 @@ def discord_callback():
     try:
         access_token = exchange_code_for_token(code)
         discord_user = fetch_discord_user_profile(access_token)
-    except requests.RequestException:
-        return redirect(f"{frontend_url}/?error=discord_auth_failed")
+    except DiscordTokenError as exc:
+        return (
+            f"<h2>Erreur Discord OAuth</h2>"
+            f"<p>Status: {exc.status_code}</p>"
+            f"<p>Reponse Discord:</p><pre>{exc.body}</pre>"
+            f"<p><a href='{frontend_url}'>Retour</a></p>"
+        ), 500
+    except requests.RequestException as exc:
+        return f"<h2>Erreur Discord OAuth</h2><pre>{exc}</pre><p><a href='{frontend_url}'>Retour</a></p>", 500
 
     session["discord_user"] = discord_user
-    return redirect(f"{frontend_url}/")
+    return redirect(f"{frontend_url}/dashboard")
 
 
 @auth_bp.get("/api/auth/me")

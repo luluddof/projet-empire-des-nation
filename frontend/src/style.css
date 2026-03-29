@@ -50,3 +50,14 @@ body {
 .error {
   color: #fca5a5;
 }
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+  background: #1e293b;
+  border-radius: 12px;
+  border: 1px solid #334155;
+}

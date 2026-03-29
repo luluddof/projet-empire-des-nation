@@ -2,18 +2,22 @@ import os
 
 from flask import Flask
 from flask_cors import CORS
+from dotenv import load_dotenv
 
 from .auth import auth_bp
 from .health import health_bp
 
 
 def create_app(test_config=None):
+    load_dotenv(override=True)
     app = Flask(__name__)
 
     app.config.from_mapping(
         SECRET_KEY=os.getenv("FLASK_SECRET_KEY", "change-me"),
-        DISCORD_CLIENT_ID=os.getenv("DISCORD_CLIENT_ID", ""),
-        DISCORD_CLIENT_SECRET=os.getenv("DISCORD_CLIENT_SECRET", ""),
+        DISCORD_CLIENT_ID=os.getenv("DISCORD_CLIENT_ID", "").strip().strip('"'),
+        DISCORD_CLIENT_SECRET=os.getenv("DISCORD_CLIENT_SECRET", "")
+        .strip()
+        .strip('"'),
         DISCORD_REDIRECT_URI=os.getenv(
             "DISCORD_REDIRECT_URI",
             "http://127.0.0.1:5000/api/auth/discord/callback",
