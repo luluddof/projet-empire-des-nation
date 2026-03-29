@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { formatFlorin, useApi } from "../composables/useApi.js";
 
 const props = defineProps({
@@ -128,6 +128,75 @@ async function sauvegarderGain() {
 const nbModifications = computed(
   () => Object.values(modifEnCours.value).filter((v) => v !== "").length
 );
+
+const sort = reactive({ key: "nom", dir: "asc" });
+
+const colonnesTri = [
+  ["nom", "Ressource"],
+  ["type", "Type"],
+  ["quantite", "Stock actuel"],
+  ["nouvelle_qte", "Nouvelle quantité"],
+  ["gain_tick", "Gain passif / tick"],
+  ["valeur", "Valeur stock (ƒ)"],
+];
+
+function gainTickPourTri(stock) {
+  const g = gainParRid.value[stock.ressource_id];
+  return g?.quantite_par_tick ?? 0;
+}
+
+const stocksTries = computed(() => {
+  const key = sort.key;
+  const dir = sort.dir === "asc" ? 1 : -1;
+  return [...stocks.value].sort((a, b) => {
+    let va;
+    let vb;
+    switch (key) {
+      case "nom":
+        va = a.ressource.nom.toLowerCase();
+        vb = b.ressource.nom.toLowerCase();
+        break;
+      case "type":
+        va = a.ressource.type;
+        vb = b.ressource.type;
+        break;
+      case "quantite":
+        va = a.quantite;
+        vb = b.quantite;
+        break;
+      case "nouvelle_qte":
+        va = qteAffichee(a);
+        vb = qteAffichee(b);
+        break;
+      case "gain_tick":
+        va = gainTickPourTri(a);
+        vb = gainTickPourTri(b);
+        break;
+      case "valeur":
+        va = qteAffichee(a) * a.ressource.prix_achat;
+        vb = qteAffichee(b) * b.ressource.prix_achat;
+        break;
+      default:
+        va = a.ressource.nom.toLowerCase();
+        vb = b.ressource.nom.toLowerCase();
+    }
+    return va === vb ? 0 : va < vb ? -dir : dir;
+  });
+});
+
+function toggleSort(k) {
+  if (sort.key === k) {
+    sort.dir = sort.dir === "asc" ? "desc" : "asc";
+  } else {
+    sort.key = k;
+    sort.dir = "asc";
+  }
+}
+
+function sortLabel(k) {
+  if (sort.key !== k) return "";
+  return sort.dir === "asc" ? " ▲" : " ▼";
+}
 </script>
 
 <template>
@@ -159,17 +228,19 @@ const nbModifications = computed(
       <table class="data-table">
         <thead>
           <tr>
-            <th>Ressource</th>
-            <th>Type</th>
-            <th>Stock actuel</th>
-            <th>Nouvelle quantité</th>
-            <th>Gain passif / tick</th>
-            <th>Valeur stock (ƒ)</th>
+            <th
+              v-for="[k, lab] in colonnesTri"
+              :key="k"
+              class="th-sort"
+              @click="toggleSort(k)"
+            >
+              {{ lab }}{{ sortLabel(k) }}
+            </th>
           </tr>
         </thead>
         <tbody>
           <tr
-            v-for="s in stocks"
+            v-for="s in stocksTries"
             :key="s.ressource_id"
             :class="{ modified: hasModif(s) }"
           >

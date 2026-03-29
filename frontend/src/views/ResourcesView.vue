@@ -10,37 +10,144 @@ const { get, post, put, del } = useApi();
 const isMj = computed(() => props.authState.user?.is_mj);
 
 const ressources = ref([]);
+const categories = ref([]);
 const erreur = ref("");
 const recherche = ref("");
-const filtreType = ref("Tous");
-const filtreCategorie = ref("Toutes");
+const filtreCategorieId = ref("");
 
-const CATEGORIES = [
-  "Toutes", "Métallurgie", "Construction", "Chauffage",
-  "Agro-alimentaire", "Textile", "Animal", "Réserve de valeur",
-];
+const sort = reactive({ key: "nom", dir: "asc" });
 
-async function charger() {
+function formatPct(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "100 %";
+  if (Number.isInteger(n)) return `${n} %`;
+  return `${n} %`;
+}
+
+async function chargerCategories() {
+  try {
+    categories.value = await get("/api/categories");
+  } catch (e) {
+    erreur.value = e.message;
+  }
+}
+
+async function chargerRessources() {
   try {
     ressources.value = await get("/api/ressources");
   } catch (e) {
     erreur.value = e.message;
   }
 }
+
+function charger() {
+  chargerCategories();
+  chargerRessources();
+}
 charger();
+
+function previewPrix(prixBase, facteur) {
+  const m = Number(facteur) || 1;
+  const pb = Number(prixBase) || 0;
+  const pm = Math.round(pb * m);
+  return {
+    prix_modifie: pm,
+    prix_achat: Math.round(pm * 1.2),
+    prix_lointain: Math.round(pm * 2.5),
+  };
+}
 
 const ressourcesFiltrees = computed(() => {
   return ressources.value.filter((r) => {
-    const matchRecherche = r.nom.toLowerCase().includes(recherche.value.toLowerCase());
-    const matchType = filtreType.value === "Tous" || r.type === filtreType.value;
-    const matchCat =
-      filtreCategorie.value === "Toutes" ||
-      (r.categories ?? "").includes(filtreCategorie.value);
-    return matchRecherche && matchType && matchCat;
+    const okNom = r.nom.toLowerCase().includes(recherche.value.toLowerCase());
+    const okCat =
+      !filtreCategorieId.value ||
+      (r.categorie_ids || []).includes(Number(filtreCategorieId.value));
+    return okNom && okCat;
   });
 });
 
-// --- Modal ---
+function categorieSortKey(r) {
+  const cats = r.categories || [];
+  return cats.map((c) => c.nom).sort().join(", ") || "zzz";
+}
+
+function sortedList(list) {
+  const key = sort.key;
+  const dir = sort.dir === "asc" ? 1 : -1;
+  return [...list].sort((a, b) => {
+    let va;
+    let vb;
+    switch (key) {
+      case "nom":
+        va = a.nom.toLowerCase();
+        vb = b.nom.toLowerCase();
+        break;
+      case "type":
+        va = a.type;
+        vb = b.type;
+        break;
+      case "prix_base":
+        va = a.prix_base;
+        vb = b.prix_base;
+        break;
+      case "modificateur_pct":
+        va = a.modificateur_pct;
+        vb = b.modificateur_pct;
+        break;
+      case "facteur_prix":
+        va = a.facteur_prix;
+        vb = b.facteur_prix;
+        break;
+      case "prix_modifie":
+        va = a.prix_modifie;
+        vb = b.prix_modifie;
+        break;
+      case "prix_achat":
+        va = a.prix_achat;
+        vb = b.prix_achat;
+        break;
+      case "prix_lointain":
+        va = a.prix_lointain;
+        vb = b.prix_lointain;
+        break;
+      case "categories":
+        va = categorieSortKey(a);
+        vb = categorieSortKey(b);
+        break;
+      default:
+        va = a.nom;
+        vb = b.nom;
+    }
+    if (typeof va === "string") {
+      return va < vb ? -dir : va > vb ? dir : 0;
+    }
+    return va === vb ? 0 : va < vb ? -dir : dir;
+  });
+}
+
+const listePremiere = computed(() =>
+  sortedList(ressourcesFiltrees.value.filter((r) => r.type === "Première"))
+);
+const listeManufacture = computed(() =>
+  sortedList(ressourcesFiltrees.value.filter((r) => r.type === "Manufacturé"))
+);
+
+function toggleSort(key) {
+  if (sort.key === key) {
+    sort.dir = sort.dir === "asc" ? "desc" : "asc";
+  } else {
+    sort.key = key;
+    sort.dir = "asc";
+  }
+}
+
+function sortLabel(key) {
+  if (sort.key !== key) return "";
+  return sort.dir === "asc" ? " ▲" : " ▼";
+}
+
+// --- Modal ressource ---
 const modalVisible = ref(false);
 const modeEdition = ref(false);
 const erreurModal = ref("");
@@ -49,18 +156,31 @@ const form = reactive({
   nom: "",
   type: "Première",
   prix_base: "",
-  modificateur: 0,
-  prix_modifie: "",
-  prix_achat: "",
-  prix_lointain: "",
-  categories: "",
+  modificateur_pct: 100,
+  categorie_ids: [],
 });
+
+const previewFacteur = computed(() => {
+  let f = (Number(form.modificateur_pct) || 100) / 100;
+  for (const id of form.categorie_ids) {
+    const c = categories.value.find((x) => x.id === id);
+    if (c) {
+      f *= (Number(c.modificateur_pct) || 100) / 100;
+    }
+  }
+  return f;
+});
+
+const preview = computed(() => previewPrix(form.prix_base, previewFacteur.value));
 
 function ouvrirCreation() {
   Object.assign(form, {
-    id: null, nom: "", type: "Première", prix_base: "",
-    modificateur: 0, prix_modifie: "", prix_achat: "",
-    prix_lointain: "", categories: "",
+    id: null,
+    nom: "",
+    type: "Première",
+    prix_base: "",
+    modificateur_pct: 100,
+    categorie_ids: [],
   });
   erreurModal.value = "";
   modeEdition.value = false;
@@ -68,23 +188,48 @@ function ouvrirCreation() {
 }
 
 function ouvrirEdition(r) {
-  Object.assign(form, { ...r });
+  Object.assign(form, {
+    id: r.id,
+    nom: r.nom,
+    type: r.type,
+    prix_base: r.prix_base,
+    modificateur_pct: r.modificateur_pct,
+    categorie_ids: [...(r.categorie_ids || [])],
+  });
   erreurModal.value = "";
   modeEdition.value = true;
   modalVisible.value = true;
 }
 
-async function sauvegarder() {
+function setCategorieChecked(catId, checked) {
+  const i = form.categorie_ids.indexOf(catId);
+  if (checked && i < 0) {
+    form.categorie_ids.push(catId);
+  }
+  if (!checked && i >= 0) {
+    form.categorie_ids.splice(i, 1);
+  }
+}
+
+async function appliquerProduitCategories() {
+  if (!form.id) return;
+  erreurModal.value = "";
+  try {
+    const r = await post(`/api/ressources/${form.id}/appliquer-modificateurs-categories`, {});
+    form.modificateur_pct = r.modificateur_pct;
+  } catch (e) {
+    erreurModal.value = e.message;
+  }
+}
+
+async function sauvegarderRessource() {
   erreurModal.value = "";
   const payload = {
     nom: form.nom,
     type: form.type,
     prix_base: Number(form.prix_base),
-    modificateur: Number(form.modificateur),
-    prix_modifie: Number(form.prix_modifie),
-    prix_achat: Number(form.prix_achat),
-    prix_lointain: Number(form.prix_lointain),
-    categories: form.categories,
+    modificateur_pct: Number(form.modificateur_pct),
+    categorie_ids: [...form.categorie_ids],
   };
   try {
     if (modeEdition.value) {
@@ -92,103 +237,215 @@ async function sauvegarder() {
     } else {
       await post("/api/ressources", payload);
     }
-    await charger();
+    await chargerRessources();
     modalVisible.value = false;
   } catch (e) {
     erreurModal.value = e.message;
   }
 }
 
-async function supprimer(r) {
+async function supprimerRessource(r) {
   if (!confirm(`Supprimer "${r.nom}" ?`)) return;
   try {
     await del(`/api/ressources/${r.id}`);
-    await charger();
+    await chargerRessources();
   } catch (e) {
     erreur.value = e.message;
   }
 }
+
+// --- Panneau catégories (MJ) ---
+const catModal = ref(false);
+const catForm = reactive({ id: null, nom: "", modificateur_pct: 100, propager: false });
+const erreurCat = ref("");
+
+function ouvrirNouvelleCategorie() {
+  Object.assign(catForm, { id: null, nom: "", modificateur_pct: 100, propager: false });
+  erreurCat.value = "";
+  catModal.value = true;
+}
+
+function ouvrirEditCategorie(c) {
+  Object.assign(catForm, {
+    id: c.id,
+    nom: c.nom,
+    modificateur_pct: c.modificateur_pct,
+    propager: false,
+  });
+  erreurCat.value = "";
+  catModal.value = true;
+}
+
+async function sauvegarderCategorie() {
+  erreurCat.value = "";
+  try {
+    if (catForm.id == null) {
+      await post("/api/categories", {
+        nom: catForm.nom,
+        modificateur_pct: Number(catForm.modificateur_pct),
+      });
+    } else {
+      await put(`/api/categories/${catForm.id}`, {
+        nom: catForm.nom,
+        modificateur_pct: Number(catForm.modificateur_pct),
+        propager: catForm.propager,
+      });
+    }
+    catModal.value = false;
+    await chargerCategories();
+    await chargerRessources();
+  } catch (e) {
+    erreurCat.value = e.message;
+  }
+}
+
+async function supprimerCategorie(c) {
+  if (!confirm(`Supprimer la catégorie « ${c.nom} » ? (elle sera retirée des ressources)`))
+    return;
+  try {
+    await del(`/api/categories/${c.id}`);
+    await chargerCategories();
+    await chargerRessources();
+  } catch (e) {
+    erreur.value = e.message;
+  }
+}
+
+const colonnes = [
+  ["nom", "Ressource"],
+  ["categories", "Catégories"],
+  ["modificateur_pct", "% ressource"],
+  ["facteur_prix", "Facteur total"],
+  ["prix_base", "Prix base"],
+  ["prix_modifie", "Prix modifié"],
+  ["prix_achat", "Prix d'achat"],
+  ["prix_lointain", "Si lointain"],
+];
 </script>
 
 <template>
   <div class="page">
     <div class="page-header">
       <div>
-        <h2 class="page-title">Catalogue des Ressources</h2>
-        <p class="page-subtitle">Prix exprimés en florins (ƒ)</p>
+        <h2 class="page-title">Catalogue des ressources</h2>
+        <p class="page-subtitle">
+          Modificateurs en % (100 % = neutre). Facteur total = ( % ressource / 100 ) × ∏( % catégorie / 100 ).
+          Prix modifié = base × facteur ; achat = modifié × 1,2 ; lointain = modifié × 2,5.
+        </p>
       </div>
-      <button v-if="isMj" class="button" @click="ouvrirCreation">+ Ajouter</button>
+      <div v-if="isMj" class="header-actions">
+        <button class="button" @click="ouvrirCreation">+ Ressource</button>
+      </div>
     </div>
 
     <p v-if="erreur" class="error">{{ erreur }}</p>
 
+    <section v-if="isMj" class="cat-panel">
+      <div class="cat-panel-head">
+        <h3 class="section-title">Catégories (modificateur en %)</h3>
+        <button type="button" class="button secondary small" @click="ouvrirNouvelleCategorie">+ Catégorie</button>
+      </div>
+      <p class="section-hint">
+        Par défaut 100 %. Une nouvelle ressource est à 100 % et les prix intègrent automatiquement les % des catégories cochées.
+        « Propager » sur une catégorie recalcule les prix de toutes les ressources qui l’utilisent.
+      </p>
+      <div class="cat-chips">
+        <div v-for="c in categories" :key="c.id" class="cat-chip cat-chip-row">
+          <div class="cat-chip-text">
+            <span class="cat-chip-nom">{{ c.nom }}</span>
+            <span class="cat-chip-mod">{{ formatPct(c.modificateur_pct) }}</span>
+          </div>
+          <div class="cat-chip-actions">
+            <button type="button" class="button secondary btn-cat-lg" @click="ouvrirEditCategorie(c)">
+              Modifier
+            </button>
+            <button type="button" class="button btn-cat-lg btn-cat-danger" @click="supprimerCategorie(c)">
+              Supprimer
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <div class="filters">
       <input v-model="recherche" type="text" placeholder="Rechercher…" class="input-search" />
-      <div class="filter-group">
-        <button
-          v-for="t in ['Tous', 'Première', 'Manufacturé']"
-          :key="t"
-          class="filter-btn"
-          :class="{ active: filtreType === t }"
-          @click="filtreType = t"
-        >{{ t }}</button>
-      </div>
-      <select v-model="filtreCategorie" class="select">
-        <option v-for="c in CATEGORIES" :key="c" :value="c">{{ c }}</option>
+      <select v-model="filtreCategorieId" class="select">
+        <option value="">Toutes les catégories</option>
+        <option v-for="c in categories" :key="c.id" :value="String(c.id)">{{ c.nom }}</option>
       </select>
     </div>
 
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Ressource</th>
-            <th>Type</th>
-            <th>Prix base</th>
-            <th>Modif.</th>
-            <th>Prix modifié</th>
-            <th>Prix d'achat</th>
-            <th>Si lointain</th>
-            <th>Catégories</th>
-            <th v-if="isMj"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="r in ressourcesFiltrees" :key="r.id">
-            <td class="nom">{{ r.nom }}</td>
-            <td>
-              <span :class="['badge', r.type === 'Manufacturé' ? 'badge-manuf' : 'badge-prem']">
-                {{ r.type }}
-              </span>
-            </td>
-            <td class="prix">{{ formatFlorin(r.prix_base) }}</td>
-            <td class="prix">{{ r.modificateur > 0 ? `×${r.modificateur}` : "—" }}</td>
-            <td class="prix">{{ formatFlorin(r.prix_modifie) }}</td>
-            <td class="prix accent">{{ formatFlorin(r.prix_achat) }}</td>
-            <td class="prix">{{ formatFlorin(r.prix_lointain) }}</td>
-            <td class="categories">
-              <span
-                v-for="cat in (r.categories ?? '').split(';').map(c => c.trim()).filter(Boolean)"
-                :key="cat"
-                class="tag"
-              >{{ cat }}</span>
-            </td>
-            <td v-if="isMj" class="actions">
-              <button class="btn-icon" title="Modifier" @click="ouvrirEdition(r)">✏</button>
-              <button class="btn-icon danger" title="Supprimer" @click="supprimer(r)">🗑</button>
-            </td>
-          </tr>
-          <tr v-if="ressourcesFiltrees.length === 0">
-            <td :colspan="isMj ? 9 : 8" class="empty">Aucune ressource trouvée.</td>
-          </tr>
-        </tbody>
-      </table>
+    <template v-for="(bloc, idx) in [
+      { titre: 'Matières premières', liste: listePremiere },
+      { titre: 'Matières manufacturées', liste: listeManufacture },
+    ]" :key="idx">
+      <h3 class="table-block-title">{{ bloc.titre }}</h3>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th
+                v-for="[k, lab] in colonnes"
+                :key="k"
+                class="th-sort"
+                @click="toggleSort(k)"
+              >
+                {{ lab }}{{ sortLabel(k) }}
+              </th>
+              <th v-if="isMj"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in bloc.liste" :key="r.id">
+              <td class="nom">{{ r.nom }}</td>
+              <td class="categories">
+                <span v-for="c in r.categories || []" :key="c.id" class="tag">
+                  {{ c.nom }} ({{ formatPct(c.modificateur_pct) }})
+                </span>
+                <span v-if="!(r.categories || []).length" class="muted">—</span>
+              </td>
+              <td class="prix">{{ formatPct(r.modificateur_pct) }}</td>
+              <td class="prix">×{{ r.facteur_prix }}</td>
+              <td class="prix">{{ formatFlorin(r.prix_base) }}</td>
+              <td class="prix">{{ formatFlorin(r.prix_modifie) }}</td>
+              <td class="prix accent">{{ formatFlorin(r.prix_achat) }}</td>
+              <td class="prix">{{ formatFlorin(r.prix_lointain) }}</td>
+              <td v-if="isMj" class="actions">
+                <button class="btn-icon" title="Modifier" @click="ouvrirEdition(r)">✏</button>
+                <button class="btn-icon danger" title="Supprimer" @click="supprimerRessource(r)">🗑</button>
+              </td>
+            </tr>
+            <tr v-if="bloc.liste.length === 0">
+              <td :colspan="isMj ? 9 : 8" class="empty">Aucune ressource.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
+
+    <div v-if="catModal" class="modal-overlay" @click.self="catModal = false">
+      <div class="modal modal-sm">
+        <h3 class="modal-title">{{ catForm.id == null ? "Nouvelle catégorie" : "Modifier la catégorie" }}</h3>
+        <p v-if="erreurCat" class="error">{{ erreurCat }}</p>
+        <label class="form-label">Nom<input v-model="catForm.nom" class="input" /></label>
+        <label class="form-label">Modificateur (%)
+          <input v-model.number="catForm.modificateur_pct" type="number" step="0.1" min="0.1" class="input" />
+        </label>
+        <p class="form-hint">100 % = aucun effet sur le facteur ; 120 % = ×1,2 pour cette catégorie.</p>
+        <label v-if="catForm.id != null" class="form-label checkbox-label">
+          <input v-model="catForm.propager" type="checkbox" />
+          Propager : recalculer les prix de toutes les ressources liées à cette catégorie
+        </label>
+        <div class="modal-footer">
+          <button class="button secondary" @click="catModal = false">Annuler</button>
+          <button class="button" @click="sauvegarderCategorie">Enregistrer</button>
+        </div>
+      </div>
     </div>
 
-    <!-- Modal création / édition (MJ uniquement) -->
     <div v-if="modalVisible" class="modal-overlay" @click.self="modalVisible = false">
-      <div class="modal">
-        <h3 class="modal-title">{{ modeEdition ? "Modifier" : "Nouvelle ressource" }}</h3>
+      <div class="modal modal-wide">
+        <h3 class="modal-title">{{ modeEdition ? "Modifier la ressource" : "Nouvelle ressource" }}</h3>
         <p v-if="erreurModal" class="error">{{ erreurModal }}</p>
         <div class="form-grid">
           <label>Nom<input v-model="form.nom" class="input" /></label>
@@ -198,16 +455,44 @@ async function supprimer(r) {
               <option>Manufacturé</option>
             </select>
           </label>
-          <label>Prix base (ƒ)<input v-model="form.prix_base" type="number" class="input" /></label>
-          <label>Modificateur<input v-model="form.modificateur" type="number" step="0.1" class="input" /></label>
-          <label>Prix modifié (ƒ)<input v-model="form.prix_modifie" type="number" class="input" /></label>
-          <label>Prix d'achat (ƒ)<input v-model="form.prix_achat" type="number" class="input" /></label>
-          <label>Prix lointain (ƒ)<input v-model="form.prix_lointain" type="number" class="input" /></label>
-          <label class="full">Catégories<input v-model="form.categories" class="input" placeholder="ex : Métallurgie ; Construction" /></label>
+          <label>Prix de base (ƒ, entier)<input v-model.number="form.prix_base" type="number" class="input" min="0" /></label>
+          <label>% modificateur ressource
+            <input v-model.number="form.modificateur_pct" type="number" step="0.1" min="0.1" class="input" />
+          </label>
         </div>
+        <p class="form-hint">Nouvelle ressource : 100 % par défaut ; les catégories cochées appliquent leur % dans le facteur total.</p>
+
+        <div class="cat-pick">
+          <div class="cat-pick-title">Catégories</div>
+          <div class="cat-pick-grid">
+            <label v-for="c in categories" :key="c.id" class="checkbox-label cat-pick-item">
+              <input
+                type="checkbox"
+                :checked="form.categorie_ids.includes(c.id)"
+                @change="(e) => setCategorieChecked(c.id, e.target.checked)"
+              />
+              {{ c.nom }} ({{ formatPct(c.modificateur_pct) }})
+            </label>
+          </div>
+        </div>
+
+        <div v-if="modeEdition" class="modal-actions-row">
+          <button type="button" class="button secondary" @click="appliquerProduitCategories">
+            Remettre % ressource à 100 % (neutre)
+          </button>
+        </div>
+
+        <div class="preview-box">
+          <strong>Aperçu</strong>
+          <span>Facteur ×{{ previewFacteur.toFixed(4) }}</span>
+          <span>Prix modifié : {{ formatFlorin(preview.prix_modifie) }}</span>
+          <span>Prix d’achat : {{ formatFlorin(preview.prix_achat) }}</span>
+          <span>Si lointain : {{ formatFlorin(preview.prix_lointain) }}</span>
+        </div>
+
         <div class="modal-footer">
           <button class="button secondary" @click="modalVisible = false">Annuler</button>
-          <button class="button" @click="sauvegarder">Sauvegarder</button>
+          <button class="button" @click="sauvegarderRessource">Enregistrer</button>
         </div>
       </div>
     </div>

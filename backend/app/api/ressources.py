@@ -1,16 +1,24 @@
 from flask import Blueprint, jsonify, request
 
 from ..extensions import db
-from ..models import Ressource
-from ..utils import login_required, mj_required
+from ..models import Categorie, Ressource
+from ..utils.prix import appliquer_produit_categories_sur_ressource, recalcule_prix_ressource
+from ..utils.decorators import login_required, mj_required
 
 ressources_bp = Blueprint("ressources", __name__)
 
-_CHAMPS = [
-    "nom", "type", "prix_base", "modificateur",
-    "prix_modifie", "prix_achat", "prix_lointain", "categories",
-]
-_CHAMPS_OBLIGATOIRES = {"nom", "type", "prix_base", "prix_modifie", "prix_achat", "prix_lointain"}
+
+def _assign_categories(r: Ressource, categorie_ids):
+    if categorie_ids is None:
+        return
+    ids = [int(x) for x in categorie_ids]
+    cats = Categorie.query.filter(Categorie.id.in_(ids)).all()
+    if len(cats) != len(ids):
+        return False, "Une ou plusieurs catégories sont introuvables"
+    r.categories_rel.clear()
+    for c in cats:
+        r.categories_rel.append(c)
+    return True, None
 
 
 @ressources_bp.get("/api/ressources")
@@ -31,11 +39,27 @@ def get_ressource(ressource_id):
 @mj_required
 def create_ressource():
     data = request.get_json() or {}
-    manquants = _CHAMPS_OBLIGATOIRES - data.keys()
-    if manquants:
-        return jsonify({"error": f"Champs obligatoires manquants : {manquants}"}), 400
-    r = Ressource(**{k: data[k] for k in _CHAMPS if k in data})
+    for k in ("nom", "type", "prix_base"):
+        if k not in data:
+            return jsonify({"error": f"Champ '{k}' requis"}), 400
+    # Nouvelle ressource : % ressource = 100 % par défaut ; le prix intègre les % des catégories liées.
+    pct_res = float(data.get("modificateur_pct", 100.0))
+    r = Ressource(
+        nom=str(data["nom"]).strip(),
+        type=data["type"],
+        prix_base=int(data["prix_base"]),
+        modificateur_pct=pct_res,
+        prix_modifie=0,
+        prix_achat=0,
+        prix_lointain=0,
+    )
     db.session.add(r)
+    db.session.flush()
+    ok, err = _assign_categories(r, data.get("categorie_ids", []))
+    if not ok:
+        db.session.rollback()
+        return jsonify({"error": err}), 400
+    recalcule_prix_ressource(r)
     db.session.commit()
     return jsonify(r.to_dict()), 201
 
@@ -45,9 +69,29 @@ def create_ressource():
 def update_ressource(ressource_id):
     r = db.get_or_404(Ressource, ressource_id)
     data = request.get_json() or {}
-    for champ in _CHAMPS:
-        if champ in data:
-            setattr(r, champ, data[champ])
+    if "nom" in data:
+        r.nom = str(data["nom"]).strip()
+    if "type" in data:
+        r.type = data["type"]
+    if "prix_base" in data:
+        r.prix_base = int(data["prix_base"])
+    if "modificateur_pct" in data:
+        r.modificateur_pct = float(data["modificateur_pct"])
+    if "categorie_ids" in data:
+        ok, err = _assign_categories(r, data["categorie_ids"])
+        if not ok:
+            return jsonify({"error": err}), 400
+    recalcule_prix_ressource(r)
+    db.session.commit()
+    return jsonify(r.to_dict())
+
+
+@ressources_bp.post("/api/ressources/<int:ressource_id>/appliquer-modificateurs-categories")
+@mj_required
+def appliquer_mods_categories(ressource_id):
+    """Remet modificateur_pct de la ressource à 100 % (neutre)."""
+    r = db.get_or_404(Ressource, ressource_id)
+    appliquer_produit_categories_sur_ressource(r)
     db.session.commit()
     return jsonify(r.to_dict())
 

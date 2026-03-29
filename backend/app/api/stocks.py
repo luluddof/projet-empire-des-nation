@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request
 
 from ..extensions import db
 from ..models import GainPassif, Ressource, Stock, Transaction
-from ..utils import get_current_user, login_required
+from ..utils.decorators import get_current_user, login_required
 
 stocks_bp = Blueprint("stocks", __name__)
 

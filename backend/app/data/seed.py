@@ -6,7 +6,7 @@ RESSOURCES_INITIALES = [
         "nom": "Acier",
         "type": "Manufacturé",
         "prix_base": 330000,
-        "modificateur": 5.5,
+        "modificateur": 1.0,
         "prix_modifie": 2145000,
         "prix_achat": 2574000,
         "prix_lointain": 6435000,
@@ -16,7 +16,7 @@ RESSOURCES_INITIALES = [
         "nom": "Alcools",
         "type": "Manufacturé",
         "prix_base": 90000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 90000,
         "prix_achat": 108000,
         "prix_lointain": 270000,
@@ -26,7 +26,7 @@ RESSOURCES_INITIALES = [
         "nom": "Argent",
         "type": "Première",
         "prix_base": 300000,
-        "modificateur": 1.916666667,
+        "modificateur": 1.0,
         "prix_modifie": 875000,
         "prix_achat": 1050000,
         "prix_lointain": 2625000,
@@ -36,7 +36,7 @@ RESSOURCES_INITIALES = [
         "nom": "Argile",
         "type": "Première",
         "prix_base": 30000,
-        "modificateur": 3.0,
+        "modificateur": 1.0,
         "prix_modifie": 120000,
         "prix_achat": 144000,
         "prix_lointain": 360000,
@@ -46,7 +46,7 @@ RESSOURCES_INITIALES = [
         "nom": "Bétail",
         "type": "Première",
         "prix_base": 30000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 30000,
         "prix_achat": 36000,
         "prix_lointain": 90000,
@@ -56,7 +56,7 @@ RESSOURCES_INITIALES = [
         "nom": "Bois",
         "type": "Première",
         "prix_base": 60000,
-        "modificateur": 5.5,
+        "modificateur": 1.0,
         "prix_modifie": 390000,
         "prix_achat": 468000,
         "prix_lointain": 1170000,
@@ -66,7 +66,7 @@ RESSOURCES_INITIALES = [
         "nom": "Bronze",
         "type": "Manufacturé",
         "prix_base": 360000,
-        "modificateur": 3.0,
+        "modificateur": 1.0,
         "prix_modifie": 1440000,
         "prix_achat": 1728000,
         "prix_lointain": 4320000,
@@ -76,7 +76,7 @@ RESSOURCES_INITIALES = [
         "nom": "Charbon",
         "type": "Première",
         "prix_base": 60000,
-        "modificateur": 5.5,
+        "modificateur": 1.0,
         "prix_modifie": 390000,
         "prix_achat": 468000,
         "prix_lointain": 1170000,
@@ -86,7 +86,7 @@ RESSOURCES_INITIALES = [
         "nom": "Cheval",
         "type": "Première",
         "prix_base": 180000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 180000,
         "prix_achat": 216000,
         "prix_lointain": 540000,
@@ -96,7 +96,7 @@ RESSOURCES_INITIALES = [
         "nom": "Coton",
         "type": "Première",
         "prix_base": 300000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 300000,
         "prix_achat": 360000,
         "prix_lointain": 900000,
@@ -106,7 +106,7 @@ RESSOURCES_INITIALES = [
         "nom": "Cuir",
         "type": "Première",
         "prix_base": 120000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 120000,
         "prix_achat": 144000,
         "prix_lointain": 360000,
@@ -116,7 +116,7 @@ RESSOURCES_INITIALES = [
         "nom": "Cuivre",
         "type": "Première",
         "prix_base": 210000,
-        "modificateur": 3.0,
+        "modificateur": 1.0,
         "prix_modifie": 840000,
         "prix_achat": 1008000,
         "prix_lointain": 2520000,
@@ -126,7 +126,7 @@ RESSOURCES_INITIALES = [
         "nom": "Epice",
         "type": "Première",
         "prix_base": 360000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 360000,
         "prix_achat": 432000,
         "prix_lointain": 1080000,
@@ -136,7 +136,7 @@ RESSOURCES_INITIALES = [
         "nom": "Étain",
         "type": "Première",
         "prix_base": 180000,
-        "modificateur": 3.0,
+        "modificateur": 1.0,
         "prix_modifie": 720000,
         "prix_achat": 864000,
         "prix_lointain": 2160000,
@@ -146,7 +146,7 @@ RESSOURCES_INITIALES = [
         "nom": "Fer",
         "type": "Première",
         "prix_base": 150000,
-        "modificateur": 3.0,
+        "modificateur": 1.0,
         "prix_modifie": 600000,
         "prix_achat": 720000,
         "prix_lointain": 1800000,
@@ -156,7 +156,7 @@ RESSOURCES_INITIALES = [
         "nom": "Fourrure",
         "type": "Première",
         "prix_base": 300000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 300000,
         "prix_achat": 360000,
         "prix_lointain": 900000,
@@ -166,7 +166,7 @@ RESSOURCES_INITIALES = [
         "nom": "Fruit",
         "type": "Première",
         "prix_base": 60000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 60000,
         "prix_achat": 72000,
         "prix_lointain": 180000,
@@ -176,7 +176,7 @@ RESSOURCES_INITIALES = [
         "nom": "Grains",
         "type": "Première",
         "prix_base": 60000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 60000,
         "prix_achat": 72000,
         "prix_lointain": 180000,
@@ -186,7 +186,7 @@ RESSOURCES_INITIALES = [
         "nom": "Huiles",
         "type": "Première",
         "prix_base": 360000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 360000,
         "prix_achat": 432000,
         "prix_lointain": 1080000,
@@ -196,7 +196,7 @@ RESSOURCES_INITIALES = [
         "nom": "Ivoire",
         "type": "Première",
         "prix_base": 600000,
-        "modificateur": 1.916666667,
+        "modificateur": 1.0,
         "prix_modifie": 1750000,
         "prix_achat": 2100000,
         "prix_lointain": 5250000,
@@ -206,7 +206,7 @@ RESSOURCES_INITIALES = [
         "nom": "Laine",
         "type": "Première",
         "prix_base": 120000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 120000,
         "prix_achat": 144000,
         "prix_lointain": 360000,
@@ -216,7 +216,7 @@ RESSOURCES_INITIALES = [
         "nom": "Lin",
         "type": "Première",
         "prix_base": 60000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 60000,
         "prix_achat": 72000,
         "prix_lointain": 180000,
@@ -226,7 +226,7 @@ RESSOURCES_INITIALES = [
         "nom": "Marbre",
         "type": "Première",
         "prix_base": 150000,
-        "modificateur": 3.0,
+        "modificateur": 1.0,
         "prix_modifie": 600000,
         "prix_achat": 720000,
         "prix_lointain": 1800000,
@@ -236,7 +236,7 @@ RESSOURCES_INITIALES = [
         "nom": "Miel",
         "type": "Première",
         "prix_base": 90000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 90000,
         "prix_achat": 108000,
         "prix_lointain": 270000,
@@ -246,7 +246,7 @@ RESSOURCES_INITIALES = [
         "nom": "Opium",
         "type": "Première",
         "prix_base": 420000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 420000,
         "prix_achat": 504000,
         "prix_lointain": 1260000,
@@ -256,7 +256,7 @@ RESSOURCES_INITIALES = [
         "nom": "Or",
         "type": "Première",
         "prix_base": 600000,
-        "modificateur": 1.916666667,
+        "modificateur": 1.0,
         "prix_modifie": 1750000,
         "prix_achat": 2100000,
         "prix_lointain": 5250000,
@@ -266,7 +266,7 @@ RESSOURCES_INITIALES = [
         "nom": "Perle",
         "type": "Première",
         "prix_base": 480000,
-        "modificateur": 1.916666667,
+        "modificateur": 1.0,
         "prix_modifie": 1400000,
         "prix_achat": 1680000,
         "prix_lointain": 4200000,
@@ -276,7 +276,7 @@ RESSOURCES_INITIALES = [
         "nom": "Pierre",
         "type": "Première",
         "prix_base": 90000,
-        "modificateur": 3.0,
+        "modificateur": 1.0,
         "prix_modifie": 360000,
         "prix_achat": 432000,
         "prix_lointain": 1080000,
@@ -286,7 +286,7 @@ RESSOURCES_INITIALES = [
         "nom": "Pierre précieuse",
         "type": "Première",
         "prix_base": 1800000,
-        "modificateur": 1.916666667,
+        "modificateur": 1.0,
         "prix_modifie": 5250000,
         "prix_achat": 6300000,
         "prix_lointain": 15750000,
@@ -296,7 +296,7 @@ RESSOURCES_INITIALES = [
         "nom": "Sel",
         "type": "Première",
         "prix_base": 300000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 300000,
         "prix_achat": 360000,
         "prix_lointain": 900000,
@@ -306,7 +306,7 @@ RESSOURCES_INITIALES = [
         "nom": "Soie",
         "type": "Première",
         "prix_base": 600000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 600000,
         "prix_achat": 720000,
         "prix_lointain": 1800000,
@@ -316,7 +316,7 @@ RESSOURCES_INITIALES = [
         "nom": "Sucre",
         "type": "Première",
         "prix_base": 360000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 360000,
         "prix_achat": 432000,
         "prix_lointain": 1080000,
@@ -326,7 +326,7 @@ RESSOURCES_INITIALES = [
         "nom": "Viande",
         "type": "Première",
         "prix_base": 150000,
-        "modificateur": 0.0,
+        "modificateur": 1.0,
         "prix_modifie": 150000,
         "prix_achat": 180000,
         "prix_lointain": 450000,
@@ -335,8 +335,40 @@ RESSOURCES_INITIALES = [
 ]
 
 
-def seed_ressources(db, Ressource):
-    if Ressource.query.count() == 0:
-        for data in RESSOURCES_INITIALES:
-            db.session.add(Ressource(**data))
-        db.session.commit()
+def seed_ressources(db, Ressource, Categorie):
+    """Peuple catégories + ressources si la base est vide (prix recalculés par les règles métier)."""
+    if Ressource.query.count() > 0:
+        return
+
+    from ..utils.prix import recalcule_prix_ressource
+
+    noms_cat = set()
+    for item in RESSOURCES_INITIALES:
+        for p in (item.get("categories") or "").split(";"):
+            n = p.strip()
+            if n:
+                noms_cat.add(n)
+    for nom in sorted(noms_cat, key=str.lower):
+        db.session.add(Categorie(nom=nom, modificateur_pct=100.0))
+    db.session.flush()
+    by_nom = {c.nom: c for c in Categorie.query.all()}
+
+    for item in RESSOURCES_INITIALES:
+        r = Ressource(
+            nom=item["nom"],
+            type=item["type"],
+            prix_base=int(item["prix_base"]),
+            modificateur_pct=100.0,
+            prix_modifie=0,
+            prix_achat=0,
+            prix_lointain=0,
+        )
+        db.session.add(r)
+        db.session.flush()
+        for p in (item.get("categories") or "").split(";"):
+            n = p.strip()
+            if n and n in by_nom:
+                r.categories_rel.append(by_nom[n])
+        recalcule_prix_ressource(r)
+
+    db.session.commit()

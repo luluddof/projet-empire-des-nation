@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request
 
 from ..extensions import db
 from ..models import Utilisateur
-from ..utils import login_required, mj_required
+from ..utils.decorators import login_required, mj_required
 
 utilisateurs_bp = Blueprint("utilisateurs", __name__)
 

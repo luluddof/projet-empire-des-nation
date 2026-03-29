@@ -55,10 +55,18 @@ def create_app(test_config=None):
         app.register_blueprint(bp)
 
     with app.app_context():
-        db.create_all()
+        from .migrate_db import (
+            migrate_legacy_categories_string,
+            migrate_modificateur_to_percent,
+            run_schema_updates,
+        )
         from .data.seed import seed_ressources
-        from .models import Ressource
-        seed_ressources(db, Ressource)
+        from .models import Categorie, Ressource
+
+        run_schema_updates()
+        migrate_modificateur_to_percent()
+        migrate_legacy_categories_string()
+        seed_ressources(db, Ressource, Categorie)
 
     if not app.config.get("TESTING"):
         from .scheduler import start_scheduler

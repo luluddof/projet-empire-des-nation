@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 from ..models import Transaction
-from ..utils import get_current_user, login_required
+from ..utils.decorators import get_current_user, login_required
 
 transactions_bp = Blueprint("transactions", __name__)
 

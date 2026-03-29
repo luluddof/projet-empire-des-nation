@@ -132,3 +132,21 @@ Les IDs Discord des MJ sont définis via `MJ_DISCORD_IDS` dans `backend/.env`.
 ## Gains passifs
 
 Chaque **mercredi et samedi à 00h00**, les ressources configurées en gain/perte passif sont automatiquement ajoutées ou retirées des stocks, et une transaction est enregistrée dans l'historique.
+
+---
+
+## Ressources, catégories et prix (MJ)
+
+- **Modificateurs en pourcentage** : **100 % = neutre** (facteur ×1). Par défaut, ressource et catégories sont à **100 %** tant qu’on ne les modifie pas.
+- **Facteur appliqué au prix** : `(modificateur_pct_ressource / 100) × ∏(modificateur_pct_catégorie / 100)` pour toutes les catégories liées.  
+  Exemple : ressource 100 %, catégories 120 % et 110 % → facteur = 1 × 1,2 × 1,1 = 1,32.
+- **Prix dérivés** (recalcul serveur) :
+  - prix modifié = arrondi(`prix_base × facteur`)
+  - prix d’achat = arrondi(prix modifié × **1,2**)
+  - prix si lointain = arrondi(prix modifié × **2,5**)
+- **Nouvelle ressource** : `modificateur_pct` par défaut **100** ; dès que des catégories sont cochées, leurs % entrent dans le facteur (sans copier un champ manuellement).
+- **API** : `modificateur_pct` sur catégories et ressources ; `categorie_ids` sur `POST/PUT /api/ressources`.
+- **`POST /api/ressources/<id>/appliquer-modificateurs-categories`** : remet le **% ressource à 100** (neutre), les catégories continuent de s’appliquer.
+- **`PUT /api/categories/<id>`** avec `"propager": true` : recalcule les prix de toutes les ressources qui contiennent cette catégorie.
+
+Les migrations SQLite gèrent l’ancien multiplicateur (`modificateur` ×100 → %) et le texte `categories`. En cas de souci : `docker compose down -v` puis `up`.
