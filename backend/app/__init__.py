@@ -3,7 +3,19 @@ import os
 from flask import Flask
 from flask_cors import CORS
 
+from .api import all_blueprints
+from .data.seed import ensure_florins_ressource, seed_ressources
 from .extensions import db
+from .migrate_db import (
+    migrate_gain_passif_balise_mode,
+    migrate_gain_passif_multi,
+    migrate_legacy_categories_string,
+    migrate_modificateur_to_percent,
+    run_schema_updates,
+    seed_prix_historique_si_vide,
+)
+from .models import Categorie, Ressource
+from .scheduler import start_scheduler
 
 
 def _env_str(key, default=""):
@@ -50,26 +62,24 @@ def create_app(test_config=None):
 
     db.init_app(app)
 
-    from .api import all_blueprints
     for bp in all_blueprints:
         app.register_blueprint(bp)
 
     with app.app_context():
-        from .migrate_db import (
-            migrate_legacy_categories_string,
-            migrate_modificateur_to_percent,
-            run_schema_updates,
-        )
-        from .data.seed import seed_ressources
-        from .models import Categorie, Ressource
-
         run_schema_updates()
+        migrate_gain_passif_multi()
+        migrate_gain_passif_balise_mode()
         migrate_modificateur_to_percent()
         migrate_legacy_categories_string()
         seed_ressources(db, Ressource, Categorie)
+        ensure_florins_ressource(db, Ressource)
+        seed_prix_historique_si_vide()
+        if not app.config.get("TESTING"):
+            from .dev.mock_activity import run_dev_mock_once
+
+            run_dev_mock_once(app)
 
     if not app.config.get("TESTING"):
-        from .scheduler import start_scheduler
         start_scheduler(app)
 
     return app

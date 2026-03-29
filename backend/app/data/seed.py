@@ -1,7 +1,19 @@
 """Données initiales issues de l'onglet Prix du fichier Excel.
 Tous les prix sont exprimés en florins (ƒ)."""
 
+from ..utils.prix import recalcule_prix_ressource
+
 RESSOURCES_INITIALES = [
+    {
+        "nom": "Florins",
+        "type": "Monnaie",
+        "prix_base": 1,
+        "modificateur": 1.0,
+        "prix_modifie": 1,
+        "prix_achat": 1,
+        "prix_lointain": 1,
+        "categories": "",
+    },
     {
         "nom": "Acier",
         "type": "Manufacturé",
@@ -340,8 +352,6 @@ def seed_ressources(db, Ressource, Categorie):
     if Ressource.query.count() > 0:
         return
 
-    from ..utils.prix import recalcule_prix_ressource
-
     noms_cat = set()
     for item in RESSOURCES_INITIALES:
         for p in (item.get("categories") or "").split(";"):
@@ -371,4 +381,27 @@ def seed_ressources(db, Ressource, Categorie):
                 r.categories_rel.append(by_nom[n])
         recalcule_prix_ressource(r)
 
+    db.session.commit()
+
+
+NOM_RESSOURCE_FLORINS = "Florins"
+
+
+def ensure_florins_ressource(db, Ressource):
+    """Ajoute la monnaie Florins si la base existait déjà sans cette ressource."""
+    if Ressource.query.filter_by(nom=NOM_RESSOURCE_FLORINS).first():
+        return
+
+    r = Ressource(
+        nom=NOM_RESSOURCE_FLORINS,
+        type="Monnaie",
+        prix_base=1,
+        modificateur_pct=100.0,
+        prix_modifie=0,
+        prix_achat=0,
+        prix_lointain=0,
+    )
+    db.session.add(r)
+    db.session.flush()
+    recalcule_prix_ressource(r)
     db.session.commit()

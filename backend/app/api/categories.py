@@ -3,6 +3,7 @@ from flask import Blueprint, jsonify, request
 from ..extensions import db
 from ..models import Categorie
 from ..utils.prix import recalcule_prix_ressource
+from ..utils.prix_snapshot import enregistrer_snapshot_prix
 from ..utils.decorators import login_required, mj_required
 
 categories_bp = Blueprint("categories", __name__)
@@ -11,6 +12,7 @@ categories_bp = Blueprint("categories", __name__)
 def _propager_prix_vers_ressources_liees(cat: Categorie):
     for r in list(cat.ressources):
         recalcule_prix_ressource(r)
+        enregistrer_snapshot_prix(r)
 
 
 @categories_bp.get("/api/categories")
@@ -63,6 +65,7 @@ def delete_categorie(categorie_id):
     for r in list(c.ressources):
         r.categories_rel.remove(c)
         recalcule_prix_ressource(r)
+        enregistrer_snapshot_prix(r)
     db.session.delete(c)
     db.session.commit()
     return jsonify({"ok": True})

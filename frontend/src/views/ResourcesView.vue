@@ -1,6 +1,11 @@
 <script setup>
-import { computed, reactive, ref } from "vue";
-import { formatFlorin, useApi } from "../composables/useApi.js";
+import { computed, reactive, ref, watch } from "vue";
+import {
+  FLORINS_NOM,
+  formatFlorin,
+  formatFlorinExact,
+  useApi,
+} from "../composables/useApi.js";
 
 const props = defineProps({
   authState: { type: Object, required: true },
@@ -34,7 +39,19 @@ async function chargerCategories() {
 
 async function chargerRessources() {
   try {
-    ressources.value = await get("/api/ressources");
+    const q = isMj.value ? "?global=1" : "";
+    ressources.value = await get(`/api/ressources${q}`);
+  } catch (e) {
+    erreur.value = e.message;
+  }
+}
+
+const utilisateursListe = ref([]);
+
+async function chargerUtilisateurs() {
+  if (!isMj.value) return;
+  try {
+    utilisateursListe.value = await get("/api/utilisateurs");
   } catch (e) {
     erreur.value = e.message;
   }
@@ -43,8 +60,14 @@ async function chargerRessources() {
 function charger() {
   chargerCategories();
   chargerRessources();
+  chargerUtilisateurs();
 }
 charger();
+
+watch(isMj, () => {
+  chargerRessources();
+  chargerUtilisateurs();
+});
 
 function previewPrix(prixBase, facteur) {
   const m = Number(facteur) || 1;
@@ -133,6 +156,80 @@ const listeManufacture = computed(() =>
   sortedList(ressourcesFiltrees.value.filter((r) => r.type === "Manufacturé"))
 );
 
+/** Sélection MJ pour ajustement groupé du % marché (hors monnaie Florins). */
+const selectedIds = ref([]);
+const bulkModal = ref(false);
+const bulkPct = ref(100);
+const bulkCible = ref("tous");
+const bulkUserIds = ref([]);
+const bulkErr = ref("");
+const bulkLoading = ref(false);
+
+function idSelectionne(id) {
+  return selectedIds.value.includes(id);
+}
+
+function toggleSelection(id) {
+  if (idSelectionne(id)) {
+    selectedIds.value = selectedIds.value.filter((x) => x !== id);
+  } else {
+    selectedIds.value = [...selectedIds.value, id];
+  }
+}
+
+function selectionnerToutListe(liste) {
+  const ids = liste.filter((r) => r.nom !== FLORINS_NOM).map((r) => r.id);
+  const set = new Set([...selectedIds.value, ...ids]);
+  selectedIds.value = [...set];
+}
+
+function selectionnerVueFiltree() {
+  const ids = ressourcesFiltrees.value.filter((r) => r.nom !== FLORINS_NOM).map((r) => r.id);
+  selectedIds.value = [...new Set(ids)];
+}
+
+function viderSelection() {
+  selectedIds.value = [];
+}
+
+function toggleBulkUser(uid) {
+  const i = bulkUserIds.value.indexOf(uid);
+  if (i >= 0) bulkUserIds.value.splice(i, 1);
+  else bulkUserIds.value.push(uid);
+}
+
+function bulkUserSelected(uid) {
+  return bulkUserIds.value.includes(uid);
+}
+
+async function appliquerBulkPrix() {
+  bulkErr.value = "";
+  if (selectedIds.value.length === 0) {
+    bulkErr.value = "Sélectionnez au moins une ressource.";
+    return;
+  }
+  if (bulkCible.value === "joueurs" && bulkUserIds.value.length === 0) {
+    bulkErr.value = "Sélectionnez au moins un joueur.";
+    return;
+  }
+  bulkLoading.value = true;
+  try {
+    await post("/api/ressources/bulk-prix-marche", {
+      ids: selectedIds.value,
+      modificateur_pct: Number(bulkPct.value),
+      cible_modificateur: bulkCible.value,
+      utilisateur_ids:
+        bulkCible.value === "joueurs" ? [...bulkUserIds.value] : [],
+    });
+    bulkModal.value = false;
+    await chargerRessources();
+  } catch (e) {
+    bulkErr.value = e.message;
+  } finally {
+    bulkLoading.value = false;
+  }
+}
+
 function toggleSort(key) {
   if (sort.key === key) {
     sort.dir = sort.dir === "asc" ? "desc" : "asc";
@@ -158,6 +255,8 @@ const form = reactive({
   prix_base: "",
   modificateur_pct: 100,
   categorie_ids: [],
+  cible_modificateur: "tous",
+  utilisateur_ids: [],
 });
 
 const previewFacteur = computed(() => {
@@ -181,6 +280,8 @@ function ouvrirCreation() {
     prix_base: "",
     modificateur_pct: 100,
     categorie_ids: [],
+    cible_modificateur: "tous",
+    utilisateur_ids: [],
   });
   erreurModal.value = "";
   modeEdition.value = false;
@@ -195,10 +296,22 @@ function ouvrirEdition(r) {
     prix_base: r.prix_base,
     modificateur_pct: r.modificateur_pct,
     categorie_ids: [...(r.categorie_ids || [])],
+    cible_modificateur: "tous",
+    utilisateur_ids: [],
   });
   erreurModal.value = "";
   modeEdition.value = true;
   modalVisible.value = true;
+}
+
+function toggleFormUser(uid) {
+  const i = form.utilisateur_ids.indexOf(uid);
+  if (i >= 0) form.utilisateur_ids.splice(i, 1);
+  else form.utilisateur_ids.push(uid);
+}
+
+function formUserSelected(uid) {
+  return form.utilisateur_ids.includes(uid);
 }
 
 function setCategorieChecked(catId, checked) {
@@ -224,6 +337,14 @@ async function appliquerProduitCategories() {
 
 async function sauvegarderRessource() {
   erreurModal.value = "";
+  if (
+    modeEdition.value &&
+    form.cible_modificateur === "joueurs" &&
+    form.utilisateur_ids.length === 0
+  ) {
+    erreurModal.value = "Sélectionnez au moins un joueur pour cette cible.";
+    return;
+  }
   const payload = {
     nom: form.nom,
     type: form.type,
@@ -231,6 +352,11 @@ async function sauvegarderRessource() {
     modificateur_pct: Number(form.modificateur_pct),
     categorie_ids: [...form.categorie_ids],
   };
+  if (modeEdition.value) {
+    payload.cible_modificateur = form.cible_modificateur;
+    payload.utilisateur_ids =
+      form.cible_modificateur === "joueurs" ? [...form.utilisateur_ids] : [];
+  }
   try {
     if (modeEdition.value) {
       await put(`/api/ressources/${form.id}`, payload);
@@ -329,8 +455,13 @@ const colonnes = [
       <div>
         <h2 class="page-title">Catalogue des ressources</h2>
         <p class="page-subtitle">
-          Modificateurs en % (100 % = neutre). Facteur total = ( % ressource / 100 ) × ∏( % catégorie / 100 ).
-          Prix modifié = base × facteur ; achat = modifié × 1,2 ; lointain = modifié × 2,5.
+          <template v-if="isMj">
+            Modificateurs en % (100 % = neutre). Facteur total = ( % ressource / 100 ) × ∏( % catégorie / 100 ).
+            Tableau : <strong>prix catalogue</strong> (global). Vous pouvez appliquer un % à tout le monde, à vous seul ou à des joueurs choisis.
+          </template>
+          <template v-else>
+            <strong>Consultation</strong> : les montants affichés utilisent <strong>votre</strong> modificateur (catalogue et éventuelle surcharge MJ).
+          </template>
         </p>
       </div>
       <div v-if="isMj" class="header-actions">
@@ -375,15 +506,44 @@ const colonnes = [
       </select>
     </div>
 
+    <div v-if="isMj" class="bulk-toolbar">
+      <span class="bulk-count">{{ selectedIds.length }} sélectionnée(s)</span>
+      <button type="button" class="button secondary small" @click="selectionnerVueFiltre">
+        Tout sélectionner (vue filtrée)
+      </button>
+      <button type="button" class="button secondary small" @click="viderSelection">
+        Vider la sélection
+      </button>
+      <button
+        type="button"
+        class="button"
+        :disabled="selectedIds.length === 0"
+        @click="bulkModal = true"
+      >
+        Prix marché groupé (% ressource)…
+      </button>
+    </div>
+
     <template v-for="(bloc, idx) in [
       { titre: 'Matières premières', liste: listePremiere },
       { titre: 'Matières manufacturées', liste: listeManufacture },
     ]" :key="idx">
-      <h3 class="table-block-title">{{ bloc.titre }}</h3>
+      <h3 class="table-block-title">
+        {{ bloc.titre }}
+        <button
+          v-if="isMj"
+          type="button"
+          class="button secondary small bloc-select-all"
+          @click="selectionnerToutListe(bloc.liste)"
+        >
+          Sélectionner tout ({{ bloc.titre }})
+        </button>
+      </h3>
       <div class="table-wrap">
         <table class="data-table">
           <thead>
             <tr>
+              <th v-if="isMj" class="th-check"></th>
               <th
                 v-for="[k, lab] in colonnes"
                 :key="k"
@@ -397,6 +557,15 @@ const colonnes = [
           </thead>
           <tbody>
             <tr v-for="r in bloc.liste" :key="r.id">
+              <td v-if="isMj" class="td-check">
+                <input
+                  v-if="r.nom !== FLORINS_NOM"
+                  type="checkbox"
+                  :checked="idSelectionne(r.id)"
+                  @change="toggleSelection(r.id)"
+                />
+                <span v-else class="muted" title="Monnaie — pas d’ajustement groupé">—</span>
+              </td>
               <td class="nom">{{ r.nom }}</td>
               <td class="categories">
                 <span v-for="c in r.categories || []" :key="c.id" class="tag">
@@ -406,22 +575,79 @@ const colonnes = [
               </td>
               <td class="prix">{{ formatPct(r.modificateur_pct) }}</td>
               <td class="prix">×{{ r.facteur_prix }}</td>
-              <td class="prix">{{ formatFlorin(r.prix_base) }}</td>
-              <td class="prix">{{ formatFlorin(r.prix_modifie) }}</td>
-              <td class="prix accent">{{ formatFlorin(r.prix_achat) }}</td>
-              <td class="prix">{{ formatFlorin(r.prix_lointain) }}</td>
+              <td class="prix" :title="formatFlorinExact(r.prix_base)">
+                {{ formatFlorin(r.prix_base) }}
+              </td>
+              <td class="prix" :title="formatFlorinExact(r.prix_modifie)">
+                {{ formatFlorin(r.prix_modifie) }}
+              </td>
+              <td class="prix accent" :title="formatFlorinExact(r.prix_achat)">
+                {{ formatFlorin(r.prix_achat) }}
+              </td>
+              <td class="prix" :title="formatFlorinExact(r.prix_lointain)">
+                {{ formatFlorin(r.prix_lointain) }}
+              </td>
               <td v-if="isMj" class="actions">
-                <button class="btn-icon" title="Modifier" @click="ouvrirEdition(r)">✏</button>
-                <button class="btn-icon danger" title="Supprimer" @click="supprimerRessource(r)">🗑</button>
+                <button type="button" class="button secondary table-row-action" @click="ouvrirEdition(r)">
+                  Modifier
+                </button>
+                <button type="button" class="button secondary table-row-action danger" @click="supprimerRessource(r)">
+                  Supprimer
+                </button>
               </td>
             </tr>
             <tr v-if="bloc.liste.length === 0">
-              <td :colspan="isMj ? 9 : 8" class="empty">Aucune ressource.</td>
+              <td :colspan="isMj ? 10 : 8" class="empty">Aucune ressource.</td>
             </tr>
           </tbody>
         </table>
       </div>
     </template>
+
+    <div v-if="bulkModal" class="modal-overlay" @click.self="bulkModal = false">
+      <div class="modal modal-md">
+        <h3 class="modal-title">Prix marché — modificateur % (ressource)</h3>
+        <p class="modal-hint">
+          S’applique aux <strong>{{ selectedIds.length }}</strong> ressource(s) sélectionnée(s).
+        </p>
+        <p v-if="bulkErr" class="error">{{ bulkErr }}</p>
+        <label class="form-label">
+          Nouveau % modificateur ressource
+          <input v-model.number="bulkPct" type="number" step="0.1" min="0.1" class="input" />
+        </label>
+        <div class="cible-mod-block">
+          <div class="cible-mod-title">Cible</div>
+          <label class="radio-line">
+            <input v-model="bulkCible" type="radio" value="tous" />
+            Tous les joueurs (met à jour le catalogue et retire les surcharges sur ces ressources)
+          </label>
+          <label class="radio-line">
+            <input v-model="bulkCible" type="radio" value="moi" />
+            Moi uniquement (surcharge sur mon compte)
+          </label>
+          <label class="radio-line">
+            <input v-model="bulkCible" type="radio" value="joueurs" />
+            Joueurs sélectionnés (comptes Discord liés)
+          </label>
+          <div v-if="bulkCible === 'joueurs'" class="user-pick-grid">
+            <label v-for="u in utilisateursListe" :key="u.id" class="checkbox-label user-pick-item">
+              <input
+                type="checkbox"
+                :checked="bulkUserSelected(u.id)"
+                @change="toggleBulkUser(u.id)"
+              />
+              {{ u.username }}
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="button secondary" :disabled="bulkLoading" @click="bulkModal = false">Annuler</button>
+          <button class="button" :disabled="bulkLoading" @click="appliquerBulkPrix">
+            {{ bulkLoading ? "…" : "Appliquer" }}
+          </button>
+        </div>
+      </div>
+    </div>
 
     <div v-if="catModal" class="modal-overlay" @click.self="catModal = false">
       <div class="modal modal-sm">
@@ -460,6 +686,31 @@ const colonnes = [
             <input v-model.number="form.modificateur_pct" type="number" step="0.1" min="0.1" class="input" />
           </label>
         </div>
+        <div v-if="modeEdition" class="cible-mod-block">
+          <div class="cible-mod-title">À l’enregistrement, appliquer ce % ressource à :</div>
+          <label class="radio-line">
+            <input v-model="form.cible_modificateur" type="radio" value="tous" />
+            Tous les joueurs (catalogue ; supprime les surcharges sur cette ressource)
+          </label>
+          <label class="radio-line">
+            <input v-model="form.cible_modificateur" type="radio" value="moi" />
+            Moi uniquement (surcharge)
+          </label>
+          <label class="radio-line">
+            <input v-model="form.cible_modificateur" type="radio" value="joueurs" />
+            Joueurs sélectionnés
+          </label>
+          <div v-if="form.cible_modificateur === 'joueurs'" class="user-pick-grid">
+            <label v-for="u in utilisateursListe" :key="u.id" class="checkbox-label user-pick-item">
+              <input
+                type="checkbox"
+                :checked="formUserSelected(u.id)"
+                @change="toggleFormUser(u.id)"
+              />
+              {{ u.username }}
+            </label>
+          </div>
+        </div>
         <p class="form-hint">Nouvelle ressource : 100 % par défaut ; les catégories cochées appliquent leur % dans le facteur total.</p>
 
         <div class="cat-pick">
@@ -485,9 +736,15 @@ const colonnes = [
         <div class="preview-box">
           <strong>Aperçu</strong>
           <span>Facteur ×{{ previewFacteur.toFixed(4) }}</span>
-          <span>Prix modifié : {{ formatFlorin(preview.prix_modifie) }}</span>
-          <span>Prix d’achat : {{ formatFlorin(preview.prix_achat) }}</span>
-          <span>Si lointain : {{ formatFlorin(preview.prix_lointain) }}</span>
+          <span :title="formatFlorinExact(preview.prix_modifie)">
+            Prix modifié : {{ formatFlorin(preview.prix_modifie) }}
+          </span>
+          <span :title="formatFlorinExact(preview.prix_achat)">
+            Prix d’achat : {{ formatFlorin(preview.prix_achat) }}
+          </span>
+          <span :title="formatFlorinExact(preview.prix_lointain)">
+            Si lointain : {{ formatFlorin(preview.prix_lointain) }}
+          </span>
         </div>
 
         <div class="modal-footer">

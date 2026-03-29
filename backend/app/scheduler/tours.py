@@ -3,6 +3,11 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from ..extensions import db
+from ..models import GainPassif, Stock, Transaction
+from ..utils.gain_passif import delta_ligne
+from ..utils.prix import prix_achat_pour_utilisateur
+
 logger = logging.getLogger(__name__)
 
 
@@ -10,13 +15,11 @@ def _appliquer_gains_passifs(app):
     """
     Parcourt tous les gains passifs actifs et incrémente/décrémente les stocks.
     Une transaction est enregistrée pour chaque mouvement.
-    Exécuté chaque mercredi et samedi à 00h00.
+    Les gains « temporaires » décrémentent tours_restants ; à 0 le gain est désactivé.
+    Exécuté chaque mercredi et samedi à 00h00 (un tour).
     """
     with app.app_context():
-        from ..extensions import db
-        from ..models import GainPassif, Stock, Transaction
-
-        gains = GainPassif.query.filter_by(actif=True).all()
+        gains = GainPassif.query.filter_by(actif=True).order_by(GainPassif.id).all()
         if not gains:
             return
 
@@ -33,17 +36,24 @@ def _appliquer_gains_passifs(app):
                 )
                 db.session.add(stock)
 
-            stock.quantite += gain.quantite_par_tick
+            q = delta_ligne(stock.quantite, gain)
+            stock.quantite += q
+            pa = prix_achat_pour_utilisateur(gain.ressource, gain.utilisateur_id)
             db.session.add(Transaction(
                 utilisateur_id=gain.utilisateur_id,
                 ressource_id=gain.ressource_id,
-                quantite=gain.quantite_par_tick,
-                valeur_florins=gain.quantite_par_tick * gain.ressource.prix_achat,
+                quantite=q,
+                valeur_florins=q * pa,
                 motif="gain_passif",
             ))
 
+            if gain.tours_restants is not None:
+                gain.tours_restants = int(gain.tours_restants) - 1
+                if gain.tours_restants <= 0:
+                    gain.actif = False
+
         db.session.commit()
-        logger.info("Tick gains passifs : %d entrées traitées.", len(gains))
+        logger.info("Tour gains passifs : %d entrées traitées.", len(gains))
 
 
 def start_scheduler(app):
@@ -52,9 +62,9 @@ def start_scheduler(app):
         func=_appliquer_gains_passifs,
         args=[app],
         trigger=CronTrigger(day_of_week="wed,sat", hour=0, minute=0),
-        id="tick_gains_passifs",
+        id="tour_gains_passifs",
         replace_existing=True,
     )
     scheduler.start()
-    logger.info("Scheduler démarré — ticks chaque mercredi et samedi à 00h00.")
+    logger.info("Scheduler démarré — tours (mercredi & samedi 00h00).")
     return scheduler

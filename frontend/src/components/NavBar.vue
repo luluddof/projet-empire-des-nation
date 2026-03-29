@@ -28,8 +28,18 @@ const avatarUrl = computed(() => {
       <router-link to="/stocks" :class="{ active: route.path === '/stocks' }">
         Mes Stocks
       </router-link>
+      <router-link to="/productions" :class="{ active: route.path === '/productions' }">
+        Mes productions
+      </router-link>
       <router-link to="/gains" :class="{ active: route.path === '/gains' }">
         Gains & Pertes
+      </router-link>
+      <router-link
+        v-if="user?.is_mj"
+        to="/mj/joueurs"
+        :class="{ active: route.path === '/mj/joueurs' }"
+      >
+        Joueurs (MJ)
       </router-link>
     </div>
 

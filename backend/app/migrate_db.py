@@ -5,11 +5,88 @@ from sqlalchemy import inspect, text
 from .extensions import db
 from .models import Categorie, Ressource
 from .utils.prix import recalcule_prix_ressource
+from .utils.prix_snapshot import enregistrer_snapshot_prix
 
 
 def run_schema_updates():
     """Crée les nouvelles tables si besoin."""
     db.create_all()
+
+
+def migrate_gain_passif_multi():
+    """
+    Ancienne table : unique (utilisateur, ressource) + une colonne de quantité par tour (schéma d’origine).
+    Nouvelle : plusieurs lignes par couple, quantite_par_tour, tours_restants (NULL = définitif).
+    """
+    insp = inspect(db.engine)
+    if "gain_passif" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("gain_passif")}
+    if "quantite_par_tour" in cols:
+        return
+
+    db.session.execute(
+        text(
+            """
+            CREATE TABLE gain_passif_new (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                utilisateur_id VARCHAR(20) NOT NULL,
+                ressource_id INTEGER NOT NULL,
+                quantite_par_tour INTEGER NOT NULL,
+                actif BOOLEAN NOT NULL,
+                tours_restants INTEGER,
+                FOREIGN KEY(utilisateur_id) REFERENCES utilisateur (id),
+                FOREIGN KEY(ressource_id) REFERENCES ressource (id)
+            )
+            """
+        )
+    )
+    db.session.execute(
+        text(
+            """
+            INSERT INTO gain_passif_new
+                (id, utilisateur_id, ressource_id, quantite_par_tour, actif, tours_restants)
+            SELECT id, utilisateur_id, ressource_id, quantite_par_tick, actif, NULL
+            FROM gain_passif
+            """
+        )
+    )
+    db.session.execute(text("DROP TABLE gain_passif"))
+    db.session.execute(text("ALTER TABLE gain_passif_new RENAME TO gain_passif"))
+    db.session.commit()
+
+
+def migrate_gain_passif_balise_mode():
+    """Ajoute balise (justification) et mode_production (fixe | pourcentage)."""
+    insp = inspect(db.engine)
+    if "gain_passif" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("gain_passif")}
+    if "balise" not in cols:
+        db.session.execute(
+            text("ALTER TABLE gain_passif ADD COLUMN balise VARCHAR(20) NOT NULL DEFAULT 'autre'")
+        )
+    if "mode_production" not in cols:
+        db.session.execute(
+            text(
+                "ALTER TABLE gain_passif ADD COLUMN mode_production VARCHAR(20) NOT NULL DEFAULT 'fixe'"
+            )
+        )
+    db.session.commit()
+
+
+def seed_prix_historique_si_vide():
+    """Un point initial par ressource si l’historique est vide (graphiques utilisables)."""
+    from .models import PrixRessourceHistorique
+
+    insp = inspect(db.engine)
+    if "prix_ressource_historique" not in insp.get_table_names():
+        return
+    if PrixRessourceHistorique.query.count() > 0:
+        return
+    for r in Ressource.query.all():
+        enregistrer_snapshot_prix(r)
+    db.session.commit()
 
 
 def migrate_modificateur_to_percent():

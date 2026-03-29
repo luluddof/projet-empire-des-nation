@@ -18,11 +18,12 @@ class Stock(db.Model):
 
     ressource = db.relationship("Ressource")
 
-    def to_dict(self):
+    def to_dict(self, utilisateur_id=None):
+        uid = utilisateur_id if utilisateur_id is not None else self.utilisateur_id
         return {
             "id": self.id,
             "utilisateur_id": self.utilisateur_id,
             "ressource_id": self.ressource_id,
-            "ressource": self.ressource.to_dict(),
+            "ressource": self.ressource.to_dict(uid),
             "quantite": self.quantite,
         }

@@ -1,12 +1,23 @@
 <script setup>
-import { computed, reactive, ref, watch } from "vue";
-import { formatFlorin, useApi } from "../composables/useApi.js";
+import { computed, nextTick, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
+import PrixSparkline from "../components/PrixSparkline.vue";
+import {
+  FLORINS_NOM,
+  formatFlorin,
+  formatFlorinExact,
+  formatQuantiteRessource,
+  useApi,
+} from "../composables/useApi.js";
+import { deltaNetProchainTour } from "../utils/gainPassif.js";
 
 const props = defineProps({
   authState: { type: Object, required: true },
 });
 
-const { get, put, patch } = useApi();
+const { get, put, post } = useApi();
+const route = useRoute();
+
 const isMj = computed(() => props.authState.user?.is_mj);
 
 const utilisateurs = ref([]);
@@ -28,7 +39,10 @@ async function chargerUtilisateurs() {
 
 async function chargerStocks() {
   erreur.value = "";
-  const uid = isMj.value && selectedUid.value ? `?uid=${selectedUid.value}` : "";
+  const uid =
+    isMj.value && selectedUid.value
+      ? `?uid=${encodeURIComponent(String(selectedUid.value))}`
+      : "";
   try {
     const [s, g] = await Promise.all([
       get(`/api/stocks${uid}`),
@@ -42,13 +56,29 @@ async function chargerStocks() {
   }
 }
 
+function syncMjUidFromRoute() {
+  if (!isMj.value) return;
+  const list = utilisateurs.value;
+  if (!list?.length) return;
+  const ids = new Set(list.map((u) => String(u.id)));
+  const raw = route.query.uid;
+  if (raw != null && raw !== "" && ids.has(String(raw))) {
+    selectedUid.value = String(raw);
+  }
+}
+
 watch(selectedUid, chargerStocks);
+watch([() => utilisateurs.value, () => route.query.uid], syncMjUidFromRoute, { immediate: true });
 chargerUtilisateurs();
 chargerStocks();
 
-const gainParRid = computed(() => {
+/** Plusieurs gains passifs possibles par ressource */
+const gainsParRid = computed(() => {
   const m = {};
-  gainsPassifs.value.forEach((g) => (m[g.ressource_id] = g));
+  gainsPassifs.value.forEach((g) => {
+    if (!m[g.ressource_id]) m[g.ressource_id] = [];
+    m[g.ressource_id].push(g);
+  });
   return m;
 });
 
@@ -73,7 +103,10 @@ function hasModif(stock) {
 async function sauvegarderTout() {
   erreur.value = "";
   sauvegarde.value = true;
-  const uidParam = isMj.value && selectedUid.value ? `?uid=${selectedUid.value}` : "";
+  const uidParam =
+    isMj.value && selectedUid.value
+      ? `?uid=${encodeURIComponent(String(selectedUid.value))}`
+      : "";
   const promesses = Object.entries(modifEnCours.value)
     .filter(([, v]) => v !== "")
     .map(([rid, qte]) =>
@@ -89,40 +122,10 @@ async function sauvegarderTout() {
   }
 }
 
-// --- Gain passif modal ---
-const gainModal = ref(null);
-const gainForm = ref({ quantite_par_tick: 0, actif: true });
-
-function ouvrirGainModal(stock) {
-  const gain = gainParRid.value[stock.ressource_id];
-  gainForm.value = {
-    quantite_par_tick: gain?.quantite_par_tick ?? 0,
-    actif: gain?.actif ?? true,
-  };
-  gainModal.value = stock;
-}
-
-const { put: apiPut, del: apiDel } = useApi();
-
-async function sauvegarderGain() {
-  const uidParam = isMj.value && selectedUid.value ? `?uid=${selectedUid.value}` : "";
-  try {
-    if (gainForm.value.quantite_par_tick === 0) {
-      if (gainParRid.value[gainModal.value.ressource_id]) {
-        const { del } = useApi();
-        await del(`/api/gains-passifs/${gainModal.value.ressource_id}${uidParam}`);
-      }
-    } else {
-      await put(
-        `/api/gains-passifs/${gainModal.value.ressource_id}${uidParam}`,
-        gainForm.value
-      );
-    }
-    await chargerStocks();
-    gainModal.value = null;
-  } catch (e) {
-    erreur.value = e.message;
-  }
+function texteProchainTour(stock) {
+  const n = gainTourPourTri(stock);
+  if (n === 0) return "0";
+  return (n > 0 ? "+" : "") + String(n);
 }
 
 const nbModifications = computed(
@@ -136,19 +139,20 @@ const colonnesTri = [
   ["type", "Type"],
   ["quantite", "Stock actuel"],
   ["nouvelle_qte", "Nouvelle quantité"],
-  ["gain_tick", "Gain passif / tick"],
+  ["gain_tour", "Prod. prochain tour"],
+  ["commerce", "Achat / vente"],
   ["valeur", "Valeur stock (ƒ)"],
 ];
 
-function gainTickPourTri(stock) {
-  const g = gainParRid.value[stock.ressource_id];
-  return g?.quantite_par_tick ?? 0;
+function gainTourPourTri(stock) {
+  const list = gainsParRid.value[stock.ressource_id] || [];
+  return deltaNetProchainTour(qteAffichee(stock), list);
 }
 
 const stocksTries = computed(() => {
   const key = sort.key;
   const dir = sort.dir === "asc" ? 1 : -1;
-  return [...stocks.value].sort((a, b) => {
+  const sorted = [...stocks.value].sort((a, b) => {
     let va;
     let vb;
     switch (key) {
@@ -168,9 +172,13 @@ const stocksTries = computed(() => {
         va = qteAffichee(a);
         vb = qteAffichee(b);
         break;
-      case "gain_tick":
-        va = gainTickPourTri(a);
-        vb = gainTickPourTri(b);
+      case "gain_tour":
+        va = gainTourPourTri(a);
+        vb = gainTourPourTri(b);
+        break;
+      case "commerce":
+        va = a.ressource.nom.toLowerCase();
+        vb = b.ressource.nom.toLowerCase();
         break;
       case "valeur":
         va = qteAffichee(a) * a.ressource.prix_achat;
@@ -182,7 +190,106 @@ const stocksTries = computed(() => {
     }
     return va === vb ? 0 : va < vb ? -dir : dir;
   });
+  const fi = sorted.findIndex((s) => s.ressource.nom === FLORINS_NOM);
+  if (fi > 0) {
+    const [row] = sorted.splice(fi, 1);
+    sorted.unshift(row);
+  }
+  return sorted;
 });
+
+const stockFlorins = computed(() =>
+  stocks.value.find((s) => s.ressource.nom === FLORINS_NOM)
+);
+
+// --- Commerce (ressources ↔ florins) ---
+const commerceModal = ref(null);
+const commerceQte = ref(1);
+const commerceQteInputRef = ref(null);
+const commerceErr = ref("");
+const commerceLoading = ref(false);
+const historiquePrix = ref([]);
+
+function ouvrirCommerce(stock, sens) {
+  commerceModal.value = { stock, sens };
+  commerceQte.value = 1;
+  commerceErr.value = "";
+}
+
+const commerceTotal = computed(() => {
+  if (!commerceModal.value) return 0;
+  const r = commerceModal.value.stock.ressource;
+  const q = Math.max(0, Math.floor(Number(commerceQte.value) || 0));
+  return commerceModal.value.sens === "achat"
+    ? q * r.prix_achat
+    : q * r.prix_modifie;
+});
+
+async function executerCommerce() {
+  if (!commerceModal.value) return;
+  commerceErr.value = "";
+  const q = Math.floor(Number(commerceQte.value) || 0);
+  if (q <= 0) {
+    commerceErr.value = "Indiquez une quantité entière positive.";
+    return;
+  }
+  const uidParam =
+    isMj.value && selectedUid.value
+      ? `?uid=${encodeURIComponent(String(selectedUid.value))}`
+      : "";
+  commerceLoading.value = true;
+  try {
+    await post(`/api/stocks/commerce${uidParam}`, {
+      ressource_id: commerceModal.value.stock.ressource_id,
+      quantite: q,
+      sens: commerceModal.value.sens,
+    });
+    commerceModal.value = null;
+    await chargerStocks();
+  } catch (e) {
+    commerceErr.value = e.message;
+  } finally {
+    commerceLoading.value = false;
+  }
+}
+
+function estFlorins(stock) {
+  return stock.ressource.nom === FLORINS_NOM;
+}
+
+watch(commerceModal, async (m) => {
+  if (!m || estFlorins(m.stock)) {
+    historiquePrix.value = [];
+  } else {
+    try {
+      historiquePrix.value = await get(
+        `/api/ressources/${m.stock.ressource_id}/historique-prix?limit=80`
+      );
+    } catch {
+      historiquePrix.value = [];
+    }
+  }
+  if (m) {
+    await nextTick();
+    commerceQteInputRef.value?.select?.();
+  }
+});
+
+function affichageStockQuantite(stock) {
+  const q = qteAffichee(stock);
+  if (estFlorins(stock)) return formatFlorin(q);
+  return formatQuantiteRessource(q);
+}
+
+function titleStockQuantite(stock) {
+  if (!estFlorins(stock)) return undefined;
+  return formatFlorinExact(qteAffichee(stock)) || undefined;
+}
+
+function titleValeurStock(stock) {
+  const v = qteAffichee(stock) * stock.ressource.prix_achat;
+  return formatFlorinExact(v) || undefined;
+}
 
 function toggleSort(k) {
   if (sort.key === k) {
@@ -204,7 +311,20 @@ function sortLabel(k) {
     <div class="page-header">
       <div>
         <h2 class="page-title">Gestion des Stocks</h2>
-        <p class="page-subtitle">Modifiez les quantités puis sauvegardez</p>
+        <p class="page-subtitle">
+          Modifiez les quantités puis sauvegardez.
+          <span
+            v-if="stockFlorins"
+            class="solde-florins"
+            :title="formatFlorinExact(qteAffichee(stockFlorins))"
+          >
+            Solde monnaie : {{ formatFlorin(qteAffichee(stockFlorins)) }}
+          </span>
+          <span class="stocks-sub-hint">
+            Détail et historique des productions :
+            <router-link to="/productions">Mes productions</router-link>.
+          </span>
+        </p>
       </div>
       <div class="header-actions">
         <select v-if="isMj" v-model="selectedUid" class="select">
@@ -250,7 +370,9 @@ function sortLabel(k) {
                 {{ s.ressource.type }}
               </span>
             </td>
-            <td class="prix">{{ s.quantite }}</td>
+            <td class="prix" :title="titleStockQuantite(s)">
+              {{ affichageStockQuantite(s) }}
+            </td>
             <td>
               <input
                 type="number"
@@ -261,26 +383,44 @@ function sortLabel(k) {
                 @input="setModif(s.ressource_id, $event.target.value)"
               />
             </td>
-            <td>
-              <button
-                class="gain-btn"
-                :class="{
-                  'gain-positif': gainParRid[s.ressource_id]?.quantite_par_tick > 0,
-                  'gain-negatif': gainParRid[s.ressource_id]?.quantite_par_tick < 0,
+            <td v-if="estFlorins(s)" class="gain-cell muted">—</td>
+            <td v-else class="gain-cell">
+              <span class="prod-next-tour" :title="'Somme des règles actives pour le prochain tour (mercredi ou samedi 00h00)'">
+                {{ texteProchainTour(s) }}
+              </span>
+              <router-link
+                class="button secondary small link-as-button"
+                :to="{
+                  path: '/productions',
+                  query: {
+                    ressource: String(s.ressource_id),
+                    ...(isMj && selectedUid ? { uid: String(selectedUid) } : {}),
+                  },
                 }"
-                @click="ouvrirGainModal(s)"
               >
-                <template v-if="gainParRid[s.ressource_id]">
-                  {{ gainParRid[s.ressource_id].quantite_par_tick > 0 ? "+" : "" }}
-                  {{ gainParRid[s.ressource_id].quantite_par_tick }}
-                  <span v-if="!gainParRid[s.ressource_id].actif" class="inactive">(inactif)</span>
-                </template>
-                <template v-else>
-                  <span class="add-gain">+ configurer</span>
-                </template>
-              </button>
+                Voir la production
+              </router-link>
             </td>
-            <td class="prix accent">
+            <td class="commerce-actions">
+              <template v-if="!estFlorins(s)">
+                <button
+                  type="button"
+                  class="button small secondary"
+                  @click="ouvrirCommerce(s, 'achat')"
+                >
+                  Acheter
+                </button>
+                <button
+                  type="button"
+                  class="button small secondary"
+                  @click="ouvrirCommerce(s, 'vente')"
+                >
+                  Vendre
+                </button>
+              </template>
+              <span v-else class="commerce-na">—</span>
+            </td>
+            <td class="prix accent" :title="titleValeurStock(s)">
               {{ formatFlorin(qteAffichee(s) * s.ressource.prix_achat) }}
             </td>
           </tr>
@@ -288,29 +428,65 @@ function sortLabel(k) {
       </table>
     </div>
 
-    <!-- Modal gain passif -->
-    <div v-if="gainModal" class="modal-overlay" @click.self="gainModal = null">
-      <div class="modal modal-sm">
+    <!-- Modal achat / vente contre florins -->
+    <div
+      v-if="commerceModal"
+      class="modal-overlay"
+      @click.self="commerceModal = null"
+    >
+      <div class="modal modal-wide commerce-modal">
         <h3 class="modal-title">
-          Gain passif — {{ gainModal.ressource.nom }}
+          {{
+            commerceModal.sens === "achat"
+              ? "Acheter contre des florins"
+              : "Vendre pour des florins"
+          }}
+          — {{ commerceModal.stock.ressource.nom }}
         </h3>
         <p class="modal-hint">
-          Valeur positive = gain, négative = perte.<br />
-          Appliqué chaque <strong>mercredi et samedi à 00h00</strong>.
+          <template v-if="commerceModal.sens === 'achat'">
+            Prix unitaire (achat) : {{ formatFlorin(commerceModal.stock.ressource.prix_achat) }}.
+            Le montant est débité de votre stock « Florins ».
+          </template>
+          <template v-else>
+            Prix unitaire (revente) : {{ formatFlorin(commerceModal.stock.ressource.prix_modifie) }}.
+            Les florins sont ajoutés à votre stock « Florins ».
+          </template>
         </p>
+        <PrixSparkline v-if="!estFlorins(commerceModal.stock)" :points="historiquePrix" />
+        <p v-if="commerceErr" class="error">{{ commerceErr }}</p>
         <label class="form-label">
-          Quantité par tick
-          <input v-model.number="gainForm.quantite_par_tick" type="number" class="input" />
+          Quantité
+          <input
+            ref="commerceQteInputRef"
+            v-model.number="commerceQte"
+            type="number"
+            min="1"
+            class="input"
+          />
         </label>
-        <label class="form-label checkbox-label">
-          <input v-model="gainForm.actif" type="checkbox" />
-          Actif
-        </label>
+        <p class="modal-total">
+          Total :
+          <strong :title="formatFlorinExact(commerceTotal)">{{ formatFlorin(commerceTotal) }}</strong>
+        </p>
         <div class="modal-footer">
-          <button class="button secondary" @click="gainModal = null">Annuler</button>
-          <button class="button" @click="sauvegarderGain">Sauvegarder</button>
+          <button
+            class="button secondary"
+            :disabled="commerceLoading"
+            @click="commerceModal = null"
+          >
+            Annuler
+          </button>
+          <button
+            class="button"
+            :disabled="commerceLoading"
+            @click="executerCommerce"
+          >
+            {{ commerceLoading ? "…" : "Confirmer" }}
+          </button>
         </div>
       </div>
     </div>
+
   </div>
 </template>

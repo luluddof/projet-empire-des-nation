@@ -14,6 +14,13 @@ def list_utilisateurs():
     return jsonify([u.to_dict() for u in users])
 
 
+@utilisateurs_bp.get("/api/utilisateurs/<string:uid>")
+@mj_required
+def get_utilisateur(uid):
+    user = db.get_or_404(Utilisateur, uid)
+    return jsonify(user.to_dict())
+
+
 @utilisateurs_bp.patch("/api/utilisateurs/<string:uid>")
 @mj_required
 def update_utilisateur(uid):
