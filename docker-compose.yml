@@ -1,0 +1,33 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "5000:5000"
+    volumes:
+      - empire_db:/app/instance
+    env_file:
+      - ./backend/.env
+    environment:
+      FLASK_HOST: "0.0.0.0"
+      FLASK_DEBUG: "0"
+      FRONTEND_URL: "http://localhost:5173"
+      # IMPORTANT: callback OAuth via le front/proxy Vite pour conserver la session.
+      DISCORD_REDIRECT_URI: "http://localhost:5173/api/auth/discord/callback"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      # Proxy /api → backend (même origine navigateur :5173 = cookie de session OK)
+      VITE_PROXY_TARGET: http://backend:5000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  empire_db:
+    name: empire_db

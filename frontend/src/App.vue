@@ -1,27 +1,30 @@
 <script setup>
 import { onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
+import NavBar from "./components/NavBar.vue";
 
-const apiBase = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:5000";
-const authState = ref({ authenticated: false });
+/** Vide = requêtes relatives via proxy Vite (cookie de session sur :5173). */
+const apiBase = import.meta.env.VITE_API_BASE ?? "";
+const router = useRouter();
+
+const authState = ref({ authenticated: false, user: null });
 const loading = ref(true);
 const errorMessage = ref("");
 
 const readErrorFromUrl = () => {
   const params = new URLSearchParams(window.location.search);
-  const error = params.get("error");
-  if (error) {
-    errorMessage.value = "La connexion Discord a echoue. Reessaie.";
+  if (params.get("error")) {
+    errorMessage.value = "La connexion Discord a échoué. Réessaie.";
+    history.replaceState({}, "", window.location.pathname);
   }
 };
 
 const fetchMe = async () => {
   loading.value = true;
   try {
-    const response = await fetch(`${apiBase}/api/auth/me`, {
-      credentials: "include",
-    });
-    authState.value = await response.json();
-  } catch (_error) {
+    const res = await fetch(`${apiBase}/api/auth/me`, { credentials: "include" });
+    authState.value = await res.json();
+  } catch {
     errorMessage.value = "Impossible de contacter le serveur.";
   } finally {
     loading.value = false;
@@ -33,43 +36,34 @@ const loginWithDiscord = () => {
 };
 
 const logout = async () => {
-  await fetch(`${apiBase}/api/auth/logout`, {
-    method: "POST",
-    credentials: "include",
-  });
-  await fetchMe();
+  await fetch(`${apiBase}/api/auth/logout`, { method: "POST", credentials: "include" });
+  authState.value = { authenticated: false, user: null };
+  router.push("/");
 };
 
 onMounted(async () => {
   readErrorFromUrl();
   await fetchMe();
+  if (authState.value.authenticated && router.currentRoute.value.path === "/") {
+    router.push("/stocks");
+  }
 });
 </script>
 
 <template>
-  <main class="container">
-    <section class="card">
-      <h1>Bienvenue sur Empire des Nation</h1>
-      <p class="subtitle">Connecte-toi avec Discord pour acceder a ton espace.</p>
+  <div v-if="loading" class="loading-screen">Chargement…</div>
 
-      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
-      <p v-if="loading">Chargement...</p>
+  <template v-else>
+    <NavBar
+      v-if="authState.authenticated"
+      :user="authState.user"
+      @logout="logout"
+    />
 
-      <template v-else>
-        <div v-if="authState.authenticated" class="state">
-          <p>
-            Connecte en tant que
-            <strong>{{ authState.user.username }}</strong>
-          </p>
-          <button class="button secondary" @click="logout">Se deconnecter</button>
-        </div>
-        <div v-else class="state">
-          <p>Tu n'es pas connecte.</p>
-          <button class="button" @click="loginWithDiscord">
-            Se connecter avec Discord
-          </button>
-        </div>
-      </template>
-    </section>
-  </main>
+    <router-view
+      :auth-state="authState"
+      :error-message="errorMessage"
+      @login="loginWithDiscord"
+    />
+  </template>
 </template>
