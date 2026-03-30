@@ -5,10 +5,13 @@ from ..extensions import db
 from ..models import GainPassif, Ressource, Stock, Transaction
 from ..utils.decorators import get_current_user, login_required
 from ..utils.gain_passif import (
+    BALISE_LABELS,
     normaliser_balise,
     normaliser_mode,
     net_un_tour,
+    net_un_tour_breakdown,
     simuler_trois_tours,
+    simuler_trois_tours_breakdown,
 )
 from ..utils.prix import prix_achat_pour_utilisateur, prix_modifie_pour_utilisateur
 
@@ -36,6 +39,18 @@ def _get_or_create_stock(utilisateur_id, ressource_id):
 # ---------------------------------------------------------------------------
 # Stocks
 # ---------------------------------------------------------------------------
+
+
+@stocks_bp.get("/api/gains-passifs/balises")
+@login_required
+def list_balises_gains_passifs():
+    # Retour pour pilotage UI : {id,label}
+    order = ["science", "politique", "evenement", "batiment", "autre"]
+    out = []
+    for k in order:
+        if k in BALISE_LABELS:
+            out.append({"id": k, "label": BALISE_LABELS[k]})
+    return jsonify(out)
 
 
 @stocks_bp.get("/api/stocks")
@@ -279,7 +294,8 @@ def get_gains_chronologie():
     ).first()
     sq = int(stock.quantite) if stock else 0
 
-    prochain_tour = net_un_tour(gains, sq)
+    prochain_breakdown = net_un_tour_breakdown(gains, sq)
+    prochain_tour = prochain_breakdown["total"]
 
     txs = (
         Transaction.query.filter_by(
@@ -300,14 +316,33 @@ def get_gains_chronologie():
         for cl in derniers
     ]
 
-    futur_vals = simuler_trois_tours(gains, sq)
-    futur = [{"tour": i + 1, "quantite": q} for i, q in enumerate(futur_vals)]
+    futur_breakdown_vals = simuler_trois_tours_breakdown(gains, sq)
+    futur = [
+        {
+            "tour": i + 1,
+            "quantite": int(row["total"]),
+        }
+        for i, row in enumerate(futur_breakdown_vals)
+    ]
+    futur_breakdown = [
+        {
+            "tour": i + 1,
+            "actif": int(row["actif"]),
+            "pending": int(row["pending"]),
+        }
+        for i, row in enumerate(futur_breakdown_vals)
+    ]
 
     return jsonify({
         "ressource": ressource.to_dict(cible_uid),
         "prochain_tour": prochain_tour,
+        "prochain_tour_breakdown": {
+            "actif": int(prochain_breakdown["actif"]),
+            "pending": int(prochain_breakdown["pending"]),
+        },
         "passe": passe,
         "futur": futur,
+        "futur_breakdown": futur_breakdown,
     })
 
 
@@ -347,6 +382,17 @@ def create_gain_passif():
     if qpt is None:
         return jsonify({"error": "Champ 'quantite_par_tour' requis"}), 400
     quantite_par_tour = int(qpt)
+
+    delai_tours = data.get("delai_tours", 0)
+    if delai_tours is None:
+        delai_tours = 0
+    try:
+        delai_tours = int(delai_tours)
+    except (TypeError, ValueError):
+        return jsonify({"error": "delai_tours doit être un entier"}), 400
+    if delai_tours < 0 or delai_tours > 1000:
+        return jsonify({"error": "delai_tours doit être entre 0 et 1000"}), 400
+
     mode = normaliser_mode(data.get("mode_production"))
     balise = normaliser_balise(data.get("balise"))
     err_pct = _erreur_pourcentage(mode, quantite_par_tour)
@@ -368,6 +414,7 @@ def create_gain_passif():
         quantite_par_tour=quantite_par_tour,
         actif=bool(data.get("actif", True)),
         tours_restants=tr,
+        delai_tours=delai_tours,
         balise=balise,
         mode_production=mode,
     )
@@ -393,6 +440,17 @@ def update_gain_passif(gain_id):
         gain.quantite_par_tour = int(data["quantite_par_tour"])
     if "actif" in data:
         gain.actif = bool(data["actif"])
+    if "delai_tours" in data:
+        dt = data.get("delai_tours", 0)
+        if dt is None:
+            dt = 0
+        try:
+            dt = int(dt)
+        except (TypeError, ValueError):
+            return jsonify({"error": "delai_tours doit être un entier"}), 400
+        if dt < 0 or dt > 1000:
+            return jsonify({"error": "delai_tours doit être entre 0 et 1000"}), 400
+        gain.delai_tours = dt
     if "definitif" in data or "tours_restants" in data:
         definitif = bool(data.get("definitif", gain.tours_restants is None))
         if definitif:

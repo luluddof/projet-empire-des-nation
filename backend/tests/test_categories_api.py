@@ -78,6 +78,79 @@ def test_categories_modificateur_pct_par_joueur(
     assert abs(rB2.get_json()["facteur_prix"] - 1.2) < 1e-6
 
 
+def test_modificateur_joueur_add_remove(client_mj, client_joueur):
+    cat = client_mj.post(
+        "/api/categories",
+        json={"nom": "CatTestAddRemove", "modificateur_pct": 100.0},
+    )
+    assert cat.status_code == 201
+    cat_id = cat.get_json()["id"]
+
+    # set à 90%
+    r = client_mj.put(
+        f"/api/categories/{cat_id}/modificateur-joueur",
+        json={"utilisateur_id": "100", "modificateur_pct": 90.0, "operation": "set"},
+    )
+    assert r.status_code == 200
+
+    # add +5 => 95
+    r2 = client_mj.put(
+        f"/api/categories/{cat_id}/modificateur-joueur",
+        json={"utilisateur_id": "100", "modificateur_pct": 5.0, "operation": "add"},
+    )
+    assert r2.status_code == 200
+
+    # remove 10 => 85
+    r3 = client_mj.put(
+        f"/api/categories/{cat_id}/modificateur-joueur",
+        json={"utilisateur_id": "100", "modificateur_pct": 10.0, "operation": "remove"},
+    )
+    assert r3.status_code == 200
+
+    # Crée une ressource liée pour vérifier le facteur prix
+    rr = client_mj.post(
+        "/api/ressources",
+        json={
+            "nom": "RessTestAddRemove",
+            "type": "Première",
+            "prix_base": 10,
+            "categorie_ids": [cat_id],
+        },
+    )
+    assert rr.status_code == 201
+    rid = rr.get_json()["id"]
+
+    rA = client_joueur.get(f"/api/ressources/{rid}")
+    assert rA.status_code == 200
+    assert abs(rA.get_json()["facteur_prix"] - 0.85) < 1e-6
+
+
+def test_categories_get_modificateur_joueur(client_mj, client_joueur, client_joueur_b):
+    # Catégorie globale : 120%
+    cat = client_mj.post(
+        "/api/categories",
+        json={"nom": "CatTestGetMJ", "modificateur_pct": 120.0},
+    )
+    assert cat.status_code == 201
+    cat_id = cat.get_json()["id"]
+
+    # Joueur B : override 80%
+    r = client_mj.put(
+        f"/api/categories/{cat_id}/modificateur-joueur",
+        json={"utilisateur_id": "101", "modificateur_pct": 80.0},
+    )
+    assert r.status_code == 200
+
+    resp = client_mj.get(
+        f"/api/categories/{cat_id}/modificateur-joueur?utilisateur_ids=100&utilisateur_ids=101"
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["valeurs"]["100"] == 120.0
+    assert data["valeurs"]["101"] == 80.0
+
+
 def test_categories_inflation_moyenne_multi_categories_et_multi_joueurs(
     client_mj, client_joueur, client_joueur_b
 ):
@@ -229,3 +302,65 @@ def test_ressource_override_mj_puis_categorie_modifiee(
     ra2 = client_joueur.get(f"/api/ressources/{rid}")
     assert ra2.status_code == 200
     assert abs(ra2.get_json()["facteur_prix"] - 1.32) < 1e-6
+
+
+def test_update_categorie_propagation_vers_ressources_liées(
+    client_mj, client_joueur
+):
+    # Catégorie unique : facteur attendu = modificateur_pct de la catégorie / 100
+    cat = client_mj.post(
+        "/api/categories",
+        json={"nom": "CatTestProp", "modificateur_pct": 120.0},
+    )
+    assert cat.status_code == 201
+    cat_id = cat.get_json()["id"]
+
+    r1 = client_mj.post(
+        "/api/ressources",
+        json={
+            "nom": "RessTestProp1",
+            "type": "Première",
+            "prix_base": 10,
+            "categorie_ids": [cat_id],
+        },
+    )
+    assert r1.status_code == 201
+    rid1 = r1.get_json()["id"]
+
+    r2 = client_mj.post(
+        "/api/ressources",
+        json={
+            "nom": "RessTestProp2",
+            "type": "Première",
+            "prix_base": 10,
+            "categorie_ids": [cat_id],
+        },
+    )
+    assert r2.status_code == 201
+    rid2 = r2.get_json()["id"]
+
+    # Avant : facteur 1.2
+    ra1 = client_joueur.get(f"/api/ressources/{rid1}")
+    ra2 = client_joueur.get(f"/api/ressources/{rid2}")
+    assert abs(ra1.get_json()["facteur_prix"] - 1.2) < 1e-6
+    assert abs(ra2.get_json()["facteur_prix"] - 1.2) < 1e-6
+
+    # Modification catégorie globale -> 130% => facteur 1.3
+    up = client_mj.put(
+        f"/api/categories/{cat_id}",
+        json={"modificateur_pct": 130.0},
+    )
+    assert up.status_code == 200
+
+    # Vue MJ "global=1" : vérifie les prix recalculés côté catalogue (valeurs stockées).
+    rm1 = client_mj.get(f"/api/ressources/{rid1}?global=1")
+    rm2 = client_mj.get(f"/api/ressources/{rid2}?global=1")
+    assert rm1.status_code == 200
+    assert rm2.status_code == 200
+    assert abs(rm1.get_json()["facteur_prix"] - 1.3) < 1e-6
+    assert abs(rm2.get_json()["facteur_prix"] - 1.3) < 1e-6
+
+    rb1 = client_joueur.get(f"/api/ressources/{rid1}")
+    rb2 = client_joueur.get(f"/api/ressources/{rid2}")
+    assert abs(rb1.get_json()["facteur_prix"] - 1.3) < 1e-6
+    assert abs(rb2.get_json()["facteur_prix"] - 1.3) < 1e-6

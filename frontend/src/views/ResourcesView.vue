@@ -248,6 +248,8 @@ function sortLabel(key) {
 const modalVisible = ref(false);
 const modeEdition = ref(false);
 const erreurModal = ref("");
+const resModMode = ref("set"); // 'set' | 'add' | 'remove' pour le % ressource
+const resBaseModificateurPct = ref(100); // base courante (global) pour aperçu add/remove
 const form = reactive({
   id: null,
   nom: "",
@@ -260,7 +262,16 @@ const form = reactive({
 });
 
 const previewFacteur = computed(() => {
-  let f = (Number(form.modificateur_pct) || 100) / 100;
+  let pctRessource;
+  if (!modeEdition.value || resModMode.value === "set") {
+    pctRessource = Number(form.modificateur_pct) || 100;
+  } else {
+    const base = Number(resBaseModificateurPct.value) || 100;
+    const delta = Number(form.modificateur_pct) || 0;
+    pctRessource = resModMode.value === "add" ? base + delta : base - delta;
+  }
+
+  let f = pctRessource / 100;
   for (const id of form.categorie_ids) {
     const c = categories.value.find((x) => x.id === id);
     if (c) {
@@ -283,6 +294,9 @@ function ouvrirCreation() {
     cible_modificateur: "tous",
     utilisateur_ids: [],
   });
+  resModMode.value = "set";
+  resBaseModificateurPct.value = 100;
+  resPlayerSearch.value = "";
   erreurModal.value = "";
   modeEdition.value = false;
   modalVisible.value = true;
@@ -299,6 +313,9 @@ function ouvrirEdition(r) {
     cible_modificateur: "tous",
     utilisateur_ids: [],
   });
+  resModMode.value = "set";
+  resBaseModificateurPct.value = Number(r.modificateur_pct) || 100;
+  resPlayerSearch.value = "";
   erreurModal.value = "";
   modeEdition.value = true;
   modalVisible.value = true;
@@ -330,6 +347,8 @@ async function appliquerProduitCategories() {
   try {
     const r = await post(`/api/ressources/${form.id}/appliquer-modificateurs-categories`, {});
     form.modificateur_pct = r.modificateur_pct;
+    resModMode.value = "set";
+    resBaseModificateurPct.value = 100;
   } catch (e) {
     erreurModal.value = e.message;
   }
@@ -356,6 +375,7 @@ async function sauvegarderRessource() {
     payload.cible_modificateur = form.cible_modificateur;
     payload.utilisateur_ids =
       form.cible_modificateur === "joueurs" ? [...form.utilisateur_ids] : [];
+    payload.operation = resModMode.value;
   }
   try {
     if (modeEdition.value) {
@@ -390,6 +410,7 @@ const erreurCat = ref("");
 // Modificateur de catégorie par joueur (surcharge)
 const catPlayerModal = ref(false);
 const catPlayerErreur = ref("");
+const catPlayerModMode = ref("set"); // 'set' | 'add' | 'remove'
 const catPlayerForm = reactive({
   categorie_id: null,
   utilisateur_ids: [],
@@ -401,11 +422,185 @@ const catPlayerCategorieNom = computed(() => {
   return categories.value.find((x) => x.id === id)?.nom ?? "";
 });
 
+// Multi-sélection de joueurs (avec recherche).
+// Règle UX demandée : en cas de recherche, les joueurs sélectionnés restent visibles et
+// sont affichés à la fin de la liste filtrée.
+const catPlayerSearch = ref("");
+const catPlayerSearchNorm = computed(() => catPlayerSearch.value.trim().toLowerCase());
+const catPlayerSelectedSet = computed(() =>
+  new Set((catPlayerForm.utilisateur_ids || []).map(String)),
+);
+const currentUserIdStr = computed(() => String(props.authState.user?.id ?? ""));
+const catPlayerSearchResults = computed(() => {
+  const q = catPlayerSearchNorm.value;
+  const all = utilisateursListe.value || [];
+  if (!q) return all;
+  return all.filter(
+    (u) =>
+      String(u.username || "").toLowerCase().includes(q) || String(u.id).includes(q),
+  );
+});
+const catPlayerVisibleJoueurs = computed(() => {
+  if (catForm.id == null) return [];
+  const q = catPlayerSearchNorm.value;
+
+  const selected = catPlayerSelectedSet.value;
+  // On retire d'abord les sélectionnés des résultats pour les ré-afficher systématiquement à la fin.
+  const listPourRecherche = q ? catPlayerSearchResults.value : utilisateursListe.value || [];
+  const resultsSansSelection = listPourRecherche.filter((u) => !selected.has(String(u.id)));
+  // Les sélectionnés doivent toujours être visibles, même s'ils ne matchent pas la recherche.
+  const selectedExtras = (utilisateursListe.value || []).filter((u) => selected.has(String(u.id)));
+
+  // Afficher le joueur courant en 1er (tout en gardant les sélectionnés en fin de bloc).
+  const uid = currentUserIdStr.value;
+  const currentFirst = (list) => {
+    if (!uid) return list;
+    const cur = list.find((u) => String(u.id) === uid);
+    if (!cur) return list;
+    return [cur, ...list.filter((u) => String(u.id) !== uid)];
+  };
+
+  return [...currentFirst(resultsSansSelection), ...currentFirst(selectedExtras)];
+});
+
+const catPlayerEtat = ref({}); // uid -> pct actuel
+const catPlayerEtatLoading = ref(false);
+const catPlayerEtatErreur = ref("");
+
+async function chargerCatPlayerEtat() {
+  catPlayerEtatErreur.value = "";
+  catPlayerEtatLoading.value = false;
+
+  if (!catForm.id) {
+    catPlayerEtat.value = {};
+    return;
+  }
+  const ids = catPlayerForm.utilisateur_ids || [];
+  if (ids.length === 0) {
+    catPlayerEtat.value = {};
+    return;
+  }
+
+  try {
+    catPlayerEtatLoading.value = true;
+    const params = new URLSearchParams();
+    for (const uid of ids) params.append("utilisateur_ids", String(uid));
+    const data = await get(
+      `/api/categories/${catForm.id}/modificateur-joueur?${params.toString()}`
+    );
+    catPlayerEtat.value = data.valeurs || {};
+  } catch (e) {
+    catPlayerEtatErreur.value = e?.message || String(e);
+  } finally {
+    catPlayerEtatLoading.value = false;
+  }
+}
+
+watch(
+  () => catModal.value,
+  (open) => {
+    if (!open) catPlayerEtat.value = {};
+    else void chargerCatPlayerEtat();
+  }
+);
+
+watch(
+  () => (catPlayerForm.utilisateur_ids || []).slice().sort().join("|"),
+  () => {
+    if (catModal.value) void chargerCatPlayerEtat();
+  }
+);
+
+// Multi-sélection de joueurs pour la modale "Ressource" (avec recherche).
+const resPlayerSearch = ref("");
+const resPlayerSearchNorm = computed(() => resPlayerSearch.value.trim().toLowerCase());
+const resPlayerSelectedSet = computed(() => new Set((form.utilisateur_ids || []).map(String)));
+const resPlayerSearchResults = computed(() => {
+  const q = resPlayerSearchNorm.value;
+  const all = utilisateursListe.value || [];
+  if (!q) return all;
+  return all.filter(
+    (u) =>
+      String(u.username || "").toLowerCase().includes(q) || String(u.id).includes(q),
+  );
+});
+const resPlayerVisibleJoueurs = computed(() => {
+  if (form.cible_modificateur !== "joueurs") return [];
+
+  const q = resPlayerSearchNorm.value;
+  const selected = resPlayerSelectedSet.value;
+
+  const listPourRecherche = q ? resPlayerSearchResults.value : utilisateursListe.value || [];
+  const resultsSansSelection = listPourRecherche.filter((u) => !selected.has(String(u.id)));
+  const selectedExtras = (utilisateursListe.value || []).filter((u) => selected.has(String(u.id)));
+
+  const uid = currentUserIdStr.value;
+  const currentFirst = (list) => {
+    if (!uid) return list;
+    const cur = list.find((u) => String(u.id) === uid);
+    if (!cur) return list;
+    return [cur, ...list.filter((u) => String(u.id) !== uid)];
+  };
+
+  return [...currentFirst(resultsSansSelection), ...currentFirst(selectedExtras)];
+});
+
+const resPlayerEtat = ref({}); // uid -> {modificateur_pct, facteur_prix, ...}
+const resPlayerEtatLoading = ref(false);
+const resPlayerEtatErreur = ref("");
+
+async function chargerResPlayerEtat() {
+  resPlayerEtatErreur.value = "";
+  resPlayerEtatLoading.value = false;
+
+  if (!modeEdition.value || !form.id || form.cible_modificateur !== "joueurs") {
+    resPlayerEtat.value = {};
+    return;
+  }
+  const ids = form.utilisateur_ids || [];
+  if (ids.length === 0) {
+    resPlayerEtat.value = {};
+    return;
+  }
+
+  try {
+    resPlayerEtatLoading.value = true;
+    const params = new URLSearchParams();
+    for (const uid of ids) params.append("utilisateur_ids", String(uid));
+    const data = await get(
+      `/api/ressources/${form.id}/modificateur-joueur?${params.toString()}`
+    );
+    resPlayerEtat.value = data.valeurs || {};
+  } catch (e) {
+    resPlayerEtatErreur.value = e?.message || String(e);
+  } finally {
+    resPlayerEtatLoading.value = false;
+  }
+}
+
+watch(
+  () => [modalVisible.value, modeEdition.value, form.cible_modificateur],
+  () => {
+    if (!modalVisible.value) resPlayerEtat.value = {};
+    else void chargerResPlayerEtat();
+  }
+);
+
+watch(
+  () => (form.utilisateur_ids || []).slice().sort().join("|"),
+  () => {
+    if (modalVisible.value) void chargerResPlayerEtat();
+  }
+);
+
 function ouvrirNouvelleCategorie() {
   Object.assign(catForm, { id: null, nom: "", modificateur_pct: 100 });
   catModMode.value = "set";
   catBaseModificateurPct.value = 100;
   erreurCat.value = "";
+  catPlayerForm.categorie_id = null;
+  catPlayerForm.utilisateur_ids = [];
+  catPlayerSearch.value = "";
   catModal.value = true;
 }
 
@@ -418,6 +613,9 @@ function ouvrirEditCategorie(c) {
   catModMode.value = "set";
   catBaseModificateurPct.value = Number(c.modificateur_pct) || 100;
   erreurCat.value = "";
+  catPlayerForm.categorie_id = c.id;
+  catPlayerForm.utilisateur_ids = [];
+  catPlayerSearch.value = "";
   catModal.value = true;
 }
 
@@ -425,10 +623,33 @@ function ouvrirModifCategorieParJoueur(c) {
   catPlayerErreur.value = "";
   catPlayerForm.categorie_id = c.id;
   catPlayerForm.modificateur_pct = Number(c.modificateur_pct) || 100;
+  catPlayerModMode.value = "set";
   catPlayerForm.utilisateur_ids = utilisateursListe.value?.[0]?.id
     ? [String(utilisateursListe.value[0].id)]
     : [];
   catPlayerModal.value = true;
+}
+
+function fixerCategorieModificateurA100() {
+  // En pratique, on force le mode "Définir" pour obtenir exactement 100 %.
+  catModMode.value = "set";
+  catBaseModificateurPct.value = 100;
+  catForm.modificateur_pct = 100;
+  erreurCat.value = "";
+}
+
+function fixerCategorieModificateurJoueurA100() {
+  // Même principe : on force le mode "Définir" pour obtenir exactement 100 %.
+  catPlayerModMode.value = "set";
+  catPlayerForm.modificateur_pct = 100;
+  catPlayerErreur.value = "";
+}
+
+function passerEnModifCategorieParJoueur() {
+  // Accès à la surcharge "par joueur" depuis le modal global.
+  if (catForm.id == null) return;
+  catModal.value = false;
+  ouvrirModifCategorieParJoueur(catForm);
 }
 
 function catPlayerUserSelected(uid) {
@@ -457,7 +678,10 @@ async function appliquerModifCategorieParJoueur(supprimer) {
     utilisateur_ids: catPlayerForm.utilisateur_ids,
     supprimer: !!supprimer,
   };
-  if (!supprimer) payload.modificateur_pct = Number(catPlayerForm.modificateur_pct);
+  if (!supprimer) {
+    payload.modificateur_pct = Number(catPlayerForm.modificateur_pct);
+    payload.operation = catPlayerModMode.value;
+  }
 
   try {
     await put(`/api/categories/${catPlayerForm.categorie_id}/modificateur-joueur`, payload);
@@ -477,20 +701,34 @@ async function sauvegarderCategorie() {
         modificateur_pct: Number(catForm.modificateur_pct),
       });
     } else {
+      const selectedIds = catPlayerForm.utilisateur_ids || [];
       const input = Number(catForm.modificateur_pct);
-      const base = Number(catBaseModificateurPct.value);
-      let newPct;
-      if (catModMode.value === "set") newPct = input;
-      else if (catModMode.value === "add") newPct = base + input;
-      else newPct = base - input;
-      if (!Number.isFinite(newPct) || newPct <= 0) {
-        erreurCat.value = "modificateur_pct doit rester > 0.";
-        return;
+
+      // Si des joueurs sont sélectionnés, on applique la modification uniquement en surcharge joueur.
+      if (selectedIds.length > 0) {
+        await put(`/api/categories/${catForm.id}/modificateur-joueur`, {
+          utilisateur_ids: selectedIds,
+          modificateur_pct: input,
+          operation: catModMode.value,
+        });
+      } else {
+        // Sinon, on met à jour le % catalogue global (propagation sur les ressources liées).
+        const base = Number(catBaseModificateurPct.value);
+        let newPct;
+        if (catModMode.value === "set") newPct = input;
+        else if (catModMode.value === "add") newPct = base + input;
+        else newPct = base - input;
+
+        if (!Number.isFinite(newPct) || newPct <= 0) {
+          erreurCat.value = "modificateur_pct doit rester > 0.";
+          return;
+        }
+
+        await put(`/api/categories/${catForm.id}`, {
+          nom: catForm.nom,
+          modificateur_pct: newPct,
+        });
       }
-      await put(`/api/categories/${catForm.id}`, {
-        nom: catForm.nom,
-        modificateur_pct: newPct,
-      });
     }
     catModal.value = false;
     await chargerCategories();
@@ -564,9 +802,6 @@ const colonnes = [
           <div class="cat-chip-actions">
             <button type="button" class="button secondary btn-cat-lg" @click="ouvrirEditCategorie(c)">
               Modifier
-            </button>
-            <button type="button" class="button secondary btn-cat-lg" @click="ouvrirModifCategorieParJoueur(c)">
-              Par joueur
             </button>
             <button type="button" class="button btn-cat-lg btn-cat-danger" @click="supprimerCategorie(c)">
               Supprimer
@@ -756,26 +991,23 @@ const colonnes = [
             step="0.1"
             min="0.1"
             class="input"
+            @focus="(e) => e.target.select()"
           />
         </label>
-        <p class="form-hint">Propagation automatique sur toutes les ressources liées.</p>
-        <div class="modal-footer">
-          <button class="button secondary" @click="catModal = false">Annuler</button>
-          <button class="button" @click="sauvegarderCategorie">Enregistrer</button>
-        </div>
-      </div>
-    </div>
-
-    <div v-if="catPlayerModal" class="modal-overlay" @click.self="catPlayerModal = false">
-      <div class="modal modal-sm">
-        <h3 class="modal-title">
-          Modificateur de catégorie — {{ catPlayerCategorieNom || "…" }}
-        </h3>
-        <p v-if="catPlayerErreur" class="error">{{ catPlayerErreur }}</p>
-        <label class="form-label">
+        <label v-if="catForm.id != null" class="form-label">
           Joueurs
-          <div class="user-pick-grid">
-            <label v-for="u in utilisateursListe" :key="u.id" class="checkbox-label user-pick-item">
+          <input
+            v-model="catPlayerSearch"
+            type="text"
+            placeholder="Rechercher un joueur…"
+            class="input player-search"
+          />
+          <div class="player-picker-list">
+            <label
+              v-for="u in catPlayerVisibleJoueurs"
+              :key="u.id"
+              class="checkbox-label user-pick-item"
+            >
               <input
                 type="checkbox"
                 :checked="catPlayerUserSelected(u.id)"
@@ -785,24 +1017,42 @@ const colonnes = [
             </label>
           </div>
         </label>
-        <label class="form-label">
-          Modificateur (%)
-          <input
-            v-model.number="catPlayerForm.modificateur_pct"
-            type="number"
-            step="0.1"
-            min="0.1"
-            class="input"
-          />
-        </label>
-        <p class="form-hint">100 % = neutre ; 80 % = ×0,8 pour ce joueur.</p>
+
+        <div v-if="(catPlayerForm.utilisateur_ids || []).length > 0" class="state-block">
+          <div class="state-title">
+            État actuel (catégorie) chez les joueurs sélectionnés
+          </div>
+          <div class="state-rows">
+            <div
+              v-for="uid in catPlayerForm.utilisateur_ids"
+              :key="uid"
+              class="state-row"
+            >
+              <span class="state-player">
+                {{ utilisateursListe.find((u) => String(u.id) === String(uid))?.username || uid }}
+              </span>
+              <span class="state-val">{{ formatPct(catPlayerEtat[uid] ?? catForm.modificateur_pct) }}</span>
+            </div>
+          </div>
+          <div v-if="catPlayerEtatLoading" class="muted">Chargement…</div>
+          <div v-if="catPlayerEtatErreur" class="error">{{ catPlayerEtatErreur }}</div>
+        </div>
+
+        <p
+          v-if="catForm.id == null || (catPlayerForm.utilisateur_ids || []).length === 0"
+          class="form-hint"
+        >
+          Propagation automatique sur toutes les ressources liées.
+        </p>
+        <p v-else class="form-hint">
+          Applique uniquement la surcharge de catégorie aux joueurs sélectionnés (le catalogue global reste inchangé).
+        </p>
         <div class="modal-footer">
-          <button class="button secondary" @click="appliquerModifCategorieParJoueur(true)">
-            Réinitialiser
+          <button class="button secondary" @click="catModal = false">Annuler</button>
+          <button class="button secondary" type="button" @click="fixerCategorieModificateurA100">
+            À 100 %
           </button>
-          <button class="button" @click="appliquerModifCategorieParJoueur(false)">
-            Appliquer
-          </button>
+          <button class="button" @click="sauvegarderCategorie">Enregistrer</button>
         </div>
       </div>
     </div>
@@ -820,12 +1070,34 @@ const colonnes = [
             </select>
           </label>
           <label>Prix de base (ƒ, entier)<input v-model.number="form.prix_base" type="number" class="input" min="0" /></label>
-          <label>% modificateur ressource
+          <label>
+            <span v-if="!modeEdition || resModMode === 'set'">% modificateur ressource</span>
+            <span v-else>Delta (%) sur % ressource</span>
             <input v-model.number="form.modificateur_pct" type="number" step="0.1" min="0.1" class="input" />
           </label>
         </div>
         <div v-if="modeEdition" class="cible-mod-block">
-          <div class="cible-mod-title">À l’enregistrement, appliquer ce % ressource à :</div>
+          <div class="cible-mod-title">Mise à jour</div>
+          <label class="radio-line">
+            <input v-model="resModMode" type="radio" value="set" />
+            Définir
+          </label>
+          <label class="radio-line">
+            <input v-model="resModMode" type="radio" value="add" />
+            Ajouter
+          </label>
+          <label class="radio-line">
+            <input v-model="resModMode" type="radio" value="remove" />
+            Retirer
+          </label>
+          <div class="cible-mod-title">
+            À l’enregistrement,
+            {{
+              resModMode === "set"
+                ? "appliquer ce % ressource à :"
+                : "ajouter/retirer ce delta sur le % ressource à :"
+            }}
+          </div>
           <label class="radio-line">
             <input v-model="form.cible_modificateur" type="radio" value="tous" />
             Tous les joueurs (catalogue ; supprime les surcharges sur cette ressource)
@@ -839,14 +1111,48 @@ const colonnes = [
             Joueurs sélectionnés
           </label>
           <div v-if="form.cible_modificateur === 'joueurs'" class="user-pick-grid">
-            <label v-for="u in utilisateursListe" :key="u.id" class="checkbox-label user-pick-item">
-              <input
-                type="checkbox"
-                :checked="formUserSelected(u.id)"
-                @change="toggleFormUser(u.id)"
-              />
-              {{ u.username }}
-            </label>
+            <input
+              v-model="resPlayerSearch"
+              type="text"
+              placeholder="Rechercher un joueur…"
+              class="input player-search"
+            />
+            <div class="player-picker-list">
+              <label
+                v-for="u in resPlayerVisibleJoueurs"
+                :key="u.id"
+                class="checkbox-label user-pick-item"
+              >
+                <input
+                  type="checkbox"
+                  :checked="formUserSelected(u.id)"
+                  @change="toggleFormUser(u.id)"
+                />
+                {{ u.username }}
+              </label>
+            </div>
+
+            <div v-if="(form.utilisateur_ids || []).length > 0" class="state-block">
+              <div class="state-title">
+                État actuel (ressource) chez les joueurs sélectionnés
+              </div>
+              <div class="state-rows">
+                <div
+                  v-for="uid in form.utilisateur_ids"
+                  :key="uid"
+                  class="state-row"
+                >
+                  <span class="state-player">
+                    {{ utilisateursListe.find((u) => String(u.id) === String(uid))?.username || uid }}
+                  </span>
+                  <span class="state-val">
+                    {{ formatPct(resPlayerEtat[uid]?.modificateur_pct ?? 100) }}
+                  </span>
+                </div>
+              </div>
+              <div v-if="resPlayerEtatLoading" class="muted">Chargement…</div>
+              <div v-if="resPlayerEtatErreur" class="error">{{ resPlayerEtatErreur }}</div>
+            </div>
           </div>
         </div>
         <p class="form-hint">Nouvelle ressource : 100 % par défaut ; les catégories cochées appliquent leur % dans le facteur total.</p>
@@ -893,3 +1199,63 @@ const colonnes = [
     </div>
   </div>
 </template>
+
+<style scoped>
+.player-search {
+  margin-top: 6px;
+}
+
+.player-picker-list {
+  margin-top: 10px;
+  max-height: 380px; /* ~20 joueurs visibles avant scroll */
+  overflow-y: auto;
+  padding-right: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.player-picker-list label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.state-block {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.25);
+}
+
+.state-title {
+  font-weight: 700;
+  font-size: 13px;
+  color: #cbd5e1;
+  margin-bottom: 8px;
+}
+
+.state-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.state-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.state-player {
+  color: #e2e8f0;
+}
+
+.state-val {
+  color: #93c5fd;
+  white-space: nowrap;
+}
+</style>

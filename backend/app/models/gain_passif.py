@@ -20,7 +20,10 @@ class GainPassif(db.Model):
     quantite_par_tour = db.Column(db.Integer, nullable=False)
     actif = db.Column(db.Boolean, default=True, nullable=False)
     tours_restants = db.Column(db.Integer, nullable=True)
-    # science | politique | evenement | autre
+    # delai_tours : nombre de tours avant le démarrage effectif de la production
+    # (ex : une "scierie" qui produit dans 2 tours => delai_tours=2).
+    delai_tours = db.Column(db.Integer, nullable=False, default=0)
+    # science | politique | evenement | batiment | autre
     balise = db.Column(db.String(20), nullable=False, default="autre")
     # fixe = unités ; pourcentage = quantite_par_tour interprété comme % du stock avant la ligne
     mode_production = db.Column(db.String(20), nullable=False, default="fixe")
@@ -37,6 +40,7 @@ class GainPassif(db.Model):
             "actif": self.actif,
             "definitif": self.tours_restants is None,
             "tours_restants": self.tours_restants,
+            "delai_tours": self.delai_tours,
             "balise": getattr(self, "balise", None) or "autre",
             "mode_production": getattr(self, "mode_production", None) or "fixe",
         }

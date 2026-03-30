@@ -36,16 +36,29 @@ def _appliquer_gains_passifs(app):
                 )
                 db.session.add(stock)
 
+            delay = getattr(gain, "delai_tours", 0) or 0
+            try:
+                delay = int(delay)
+            except Exception:
+                delay = 0
+
+            if delay > 0:
+                # Pendant le délai : la production ne s'applique pas, mais on compte le temps.
+                gain.delai_tours = delay - 1
+                continue
+
             q = delta_ligne(stock.quantite, gain)
             stock.quantite += q
             pa = prix_achat_pour_utilisateur(gain.ressource, gain.utilisateur_id)
-            db.session.add(Transaction(
-                utilisateur_id=gain.utilisateur_id,
-                ressource_id=gain.ressource_id,
-                quantite=q,
-                valeur_florins=q * pa,
-                motif="gain_passif",
-            ))
+            db.session.add(
+                Transaction(
+                    utilisateur_id=gain.utilisateur_id,
+                    ressource_id=gain.ressource_id,
+                    quantite=q,
+                    valeur_florins=q * pa,
+                    motif="gain_passif",
+                )
+            )
 
             if gain.tours_restants is not None:
                 gain.tours_restants = int(gain.tours_restants) - 1

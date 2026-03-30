@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import UTC, datetime
 
 from ..extensions import db
@@ -184,6 +185,11 @@ def _run_impl(app) -> None:
 
     _appliquer_gains_passifs(app)
     logger.info("Dev mock : tour simulé 1/2 terminé.")
+
+    # On force un écart temporel suffisant pour que le regroupement des transactions
+    # (dans /api/gains-passifs/chronologie) ne fusionne pas 2 tours consécutifs.
+    # Le regroupement utilise un gap de ~8s ; on met 9s.
+    time.sleep(9)
 
     # Choc prix entre les deux tours
     _appliquer_choc_prix(

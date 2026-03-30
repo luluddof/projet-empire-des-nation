@@ -99,27 +99,48 @@ def set_modificateur_joueur(categorie_id: int):
         return jsonify({"ok": True, "categorie_id": c.id, "supprimé": True})
 
     if "modificateur_pct" not in data:
-        return (
-            jsonify({"error": "Champ 'modificateur_pct' requis (ou 'supprimer': true)"}),
-            400,
-        )
+        return jsonify({"error": "Champ 'modificateur_pct' requis (ou 'supprimer': true)"}), 400
 
-    pct = float(data["modificateur_pct"])
-    if pct <= 0:
-        return jsonify({"error": "modificateur_pct doit être > 0"}), 400
+    operation = (data.get("operation") or "set").strip().lower()
+    if operation not in ("set", "add", "remove"):
+        return jsonify({"error": "operation invalide (set, add, remove)"}), 400
+
+    pct_in = float(data["modificateur_pct"])
+    if operation == "set":
+        if pct_in <= 0:
+            return jsonify({"error": "modificateur_pct doit être > 0"}), 400
+    else:
+        # add/remove : on attend une "valeur delta" positive (on applique -delta en remove)
+        if pct_in <= 0:
+            return jsonify({"error": "Pour add/remove, modificateur_pct (delta) doit être > 0"}), 400
 
     for uid in utilisateur_ids:
+        base = float(c.modificateur_pct)
         row = CategorieModificateurJoueur.query.filter_by(
             utilisateur_id=uid, categorie_id=c.id
         ).first()
+
         if row is not None:
-            row.modificateur_pct = pct
+            base = float(row.modificateur_pct)
+
+        if operation == "set":
+            nouveau = pct_in
+        elif operation == "add":
+            nouveau = base + pct_in
+        else:  # remove
+            nouveau = base - pct_in
+
+        if nouveau <= 0:
+            return jsonify({"error": "Résultat invalide : modificateur_pct doit rester > 0"}), 400
+
+        if row is not None:
+            row.modificateur_pct = nouveau
         else:
             db.session.add(
                 CategorieModificateurJoueur(
                     utilisateur_id=uid,
                     categorie_id=c.id,
-                    modificateur_pct=pct,
+                    modificateur_pct=nouveau,
                 )
             )
 
@@ -128,10 +149,43 @@ def set_modificateur_joueur(categorie_id: int):
         {
             "ok": True,
             "categorie_id": c.id,
-            "modificateur_pct": pct,
+            "modificateur_pct": pct_in,
+            "operation": operation,
             "utilisateur_ids": utilisateur_ids,
         }
     )
+
+
+@categories_bp.get("/api/categories/<int:categorie_id>/modificateur-joueur")
+@mj_required
+def get_modificateur_joueur(categorie_id: int):
+    c = db.get_or_404(Categorie, categorie_id)
+
+    # Accepte soit :
+    # - utilisateur_id=101
+    # - utilisateur_ids=101&utilisateur_ids=102
+    utilisateur_ids = request.args.getlist("utilisateur_ids")
+    if not utilisateur_ids:
+        uid = request.args.get("utilisateur_id")
+        if uid:
+            utilisateur_ids = [uid]
+
+    utilisateur_ids = [str(x) for x in utilisateur_ids if x is not None and str(x).strip() != ""]
+    if not utilisateur_ids:
+        return jsonify({"error": "utilisateur_id ou utilisateur_ids requis"}), 400
+
+    for uid in utilisateur_ids:
+        if not db.session.get(Utilisateur, uid):
+            return jsonify({"error": f"Joueur inconnu : {uid}"}), 400
+
+    valeurs = {}
+    for uid in utilisateur_ids:
+        row = CategorieModificateurJoueur.query.filter_by(
+            utilisateur_id=uid, categorie_id=c.id
+        ).first()
+        valeurs[uid] = float(row.modificateur_pct) if row is not None else float(c.modificateur_pct)
+
+    return jsonify({"ok": True, "categorie_id": c.id, "valeurs": valeurs})
 
 
 @categories_bp.delete("/api/categories/<int:categorie_id>")

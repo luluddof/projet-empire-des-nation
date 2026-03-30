@@ -9,6 +9,7 @@ from .extensions import db
 from .migrate_db import (
     migrate_gain_passif_balise_mode,
     migrate_gain_passif_multi,
+    migrate_gain_passif_delai_tours,
     migrate_legacy_categories_string,
     migrate_modificateur_to_percent,
     run_schema_updates,
@@ -69,6 +70,7 @@ def create_app(test_config=None):
         run_schema_updates()
         migrate_gain_passif_multi()
         migrate_gain_passif_balise_mode()
+        migrate_gain_passif_delai_tours()
         migrate_modificateur_to_percent()
         migrate_legacy_categories_string()
         seed_ressources(db, Ressource, Categorie)

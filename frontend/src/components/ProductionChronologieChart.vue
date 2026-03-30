@@ -4,6 +4,8 @@ import { computed } from "vue";
 const props = defineProps({
   passe: { type: Array, default: () => [] },
   futur: { type: Array, default: () => [] },
+  futurBreakdown: { type: Array, default: () => [] },
+  ressourceNom: { type: String, default: "" },
 });
 
 const W = 440;
@@ -105,12 +107,22 @@ const chartGeometry = computed(() => {
 
   return { nodes, segments, sepX };
 });
+
+const futurBreakdownRows = computed(() => {
+  const rows = props.futurBreakdown || [];
+  return rows.map((r) => ({
+    tour: Number(r.tour) || 0,
+    actif: Number(r.actif) || 0,
+    pending: Number(r.pending) || 0,
+    total: Number(r.actif || 0) + Number(r.pending || 0),
+  }));
+});
 </script>
 
 <template>
   <div class="prod-chart-wrap">
     <div class="prod-chart-label">
-      Production par tour (style cours) : segment
+      Production par tour ({{ props.ressourceNom || "—" }}) : segment
       <span class="leg leg-up">vert</span>
       si la valeur augmente par rapport au point précédent,
       <span class="leg leg-down">rouge</span>
@@ -186,6 +198,32 @@ const chartGeometry = computed(() => {
         {{ n.value > 0 ? "+" : "" }}{{ n.value }}
       </text>
     </svg>
+
+    <!-- Tableau de séparation : actif vs en attente (futur) -->
+    <div v-if="futurBreakdownRows.length" class="prod-breakdown-table">
+      <div class="breakdown-head">
+        <div>Tour</div>
+        <div class="breakdown-actif">Actif</div>
+        <div class="breakdown-pending">En attente</div>
+        <div class="breakdown-total">Total</div>
+      </div>
+      <div
+        v-for="row in futurBreakdownRows"
+        :key="'break-' + row.tour"
+        class="breakdown-row"
+      >
+        <div class="breakdown-tour">T+{{ row.tour }}</div>
+        <div class="breakdown-actif">
+          {{ row.actif > 0 ? "+" : "" }}{{ row.actif }}
+        </div>
+        <div class="breakdown-pending">
+          {{ row.pending > 0 ? "+" : "" }}{{ row.pending }}
+        </div>
+        <div class="breakdown-total">
+          {{ row.total > 0 ? "+" : "" }}{{ row.total }}
+        </div>
+      </div>
+    </div>
     <p v-else class="prod-chart-empty">Pas encore de données pour ce graphique.</p>
   </div>
 </template>
@@ -248,5 +286,54 @@ const chartGeometry = computed(() => {
   background: #0f172a;
   border-radius: 8px;
   border: 1px dashed #334155;
+}
+
+.prod-breakdown-table {
+  margin-top: 10px;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.breakdown-head,
+.breakdown-row {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr 1fr 1fr;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.breakdown-head {
+  background: #0b1224;
+  color: #94a3b8;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.breakdown-row {
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 13px;
+  border-top: 1px solid #1f2937;
+}
+
+.breakdown-actif {
+  color: #4ade80;
+  font-weight: 700;
+}
+
+.breakdown-pending {
+  color: #a78bfa;
+  font-weight: 700;
+}
+
+.breakdown-total {
+  color: #e2e8f0;
+  font-weight: 800;
+}
+
+.breakdown-tour {
+  color: #94a3b8;
+  font-weight: 700;
 }
 </style>

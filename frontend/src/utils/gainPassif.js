@@ -4,7 +4,7 @@
  */
 export function deltaNetProchainTour(stockQuantite, gainsPourRessource) {
   const list = (gainsPourRessource || [])
-    .filter((g) => g.actif)
+    .filter((g) => g.actif && Number(g.delai_tours ?? 0) <= 0)
     .sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
   let cur = Number(stockQuantite) || 0;
   let total = 0;
@@ -24,6 +24,7 @@ export const BALISE_LABELS = {
   science: "Science",
   politique: "Politique",
   evenement: "Événement",
+  batiment: "Bâtiment",
   autre: "Autre",
 };
 

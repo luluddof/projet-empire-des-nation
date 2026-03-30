@@ -75,6 +75,21 @@ def migrate_gain_passif_balise_mode():
     db.session.commit()
 
 
+def migrate_gain_passif_delai_tours():
+    """Ajoute delai_tours (nombre de tours avant démarrage effectif)."""
+    insp = inspect(db.engine)
+    if "gain_passif" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("gain_passif")}
+    if "delai_tours" not in cols:
+        db.session.execute(
+            text(
+                "ALTER TABLE gain_passif ADD COLUMN delai_tours INTEGER NOT NULL DEFAULT 0"
+            )
+        )
+        db.session.commit()
+
+
 def seed_prix_historique_si_vide():
     """Un point initial par ressource si l’historique est vide (graphiques utilisables)."""
     from .models import PrixRessourceHistorique

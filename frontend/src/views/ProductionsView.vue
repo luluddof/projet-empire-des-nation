@@ -3,7 +3,7 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ProductionChronologieChart from "../components/ProductionChronologieChart.vue";
 import { FLORINS_NOM, useApi } from "../composables/useApi.js";
-import { formatEffetProduction, libelleBalise } from "../utils/gainPassif.js";
+import { formatEffetProduction } from "../utils/gainPassif.js";
 
 const props = defineProps({
   authState: { type: Object, required: true },
@@ -19,6 +19,7 @@ const utilisateurs = ref([]);
 const selectedUid = ref(props.authState.user?.id ?? "");
 const gainsPassifs = ref([]);
 const ressourcesListe = ref([]);
+const balisesDisponibles = ref([]);
 const chronologie = ref(null);
 const erreur = ref("");
 const gainQteInputRef = ref(null);
@@ -55,16 +56,23 @@ async function charger() {
       : "";
   const qRes = isMj.value ? "?global=1" : "";
   try {
-    const [g, r] = await Promise.all([
+    const [g, r, balises] = await Promise.all([
       get(`/api/gains-passifs${uid}`),
       get(`/api/ressources${qRes}`),
+      get("/api/gains-passifs/balises"),
     ]);
     gainsPassifs.value = g;
     ressourcesListe.value = (r || []).filter((x) => x.nom !== FLORINS_NOM);
+    balisesDisponibles.value = balises || [];
   } catch (e) {
     erreur.value = e.message;
   }
   await chargerChronologie();
+}
+
+function libelleBalise(b) {
+  const map = new Map((balisesDisponibles.value || []).map((x) => [x.id, x.label]));
+  return map.get(b) ?? map.get("autre") ?? b ?? "—";
 }
 
 async function chargerChronologie() {
@@ -169,6 +177,44 @@ const gainsTries = computed(() => {
   });
 });
 
+const productionsParRessource = computed(() => {
+  const m = new Map();
+  for (const g of gainsPassifs.value || []) {
+    const rid = Number(g.ressource_id);
+    if (!m.has(rid)) {
+      m.set(rid, { ressource_id: rid, ressource: g.ressource, gains: [] });
+    }
+    m.get(rid).gains.push(g);
+  }
+  const out = Array.from(m.values());
+  out.sort((a, b) => (a.ressource?.nom ?? "").localeCompare(b.ressource?.nom ?? "", "fr"));
+  for (const x of out) {
+    x.gains.sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
+  }
+  return out;
+});
+
+function ouvrirDetailRessource(rid) {
+  if (!rid) return;
+  const q = { ressource: String(rid) };
+  if (isMj.value && selectedUid.value) {
+    q.uid = String(selectedUid.value);
+  }
+  router.push({ path: "/productions", query: q });
+}
+
+function ouvrirCreationSelonContexte() {
+  if (ressourceIdFiltre.value) {
+    ouvrirCreation(ressourceIdFiltre.value);
+  } else {
+    ouvrirCreationVide();
+  }
+}
+
+function ouvrirAjoutProductionPourRessource(ressourceId, nom = "") {
+  ouvrirCreation(ressourceId, nom);
+}
+
 function toggleSort(k) {
   if (sort.key === k) sort.dir = sort.dir === "asc" ? "desc" : "asc";
   else {
@@ -192,6 +238,7 @@ const gainForm = reactive({
   actif: true,
   definitif: true,
   tours_restants: 6,
+  delai_tours: 0,
 });
 
 function resetGainForm() {
@@ -202,6 +249,7 @@ function resetGainForm() {
   gainForm.actif = true;
   gainForm.definitif = true;
   gainForm.tours_restants = 6;
+  gainForm.delai_tours = 0;
 }
 
 function ouvrirCreation(ressourceId = null, nom = "") {
@@ -223,6 +271,11 @@ watch(gainFormModal, async (m) => {
   }
 });
 
+function selectGainQuantite() {
+  // Sélectionne toute la valeur quand on focus le champ.
+  gainQteInputRef.value?.select?.();
+}
+
 function ouvrirCreationVide() {
   ouvrirCreation();
 }
@@ -236,6 +289,7 @@ function ouvrirEditionGain(g) {
   gainForm.actif = g.actif;
   gainForm.definitif = g.definitif;
   gainForm.tours_restants = g.tours_restants ?? 6;
+  gainForm.delai_tours = g.delai_tours ?? 0;
   gainFormModal.value = {
     mode: "edit",
     gain: g,
@@ -262,6 +316,7 @@ async function sauvegarderGainForm(etAjouterAutre = false) {
         actif: gainForm.actif,
         definitif: gainForm.definitif,
         tours_restants: gainForm.definitif ? undefined : Number(gainForm.tours_restants),
+        delai_tours: Number(gainForm.delai_tours),
       });
     } else {
       await put(`/api/gains-passifs/${m.gain.id}${uidParam}`, {
@@ -271,6 +326,7 @@ async function sauvegarderGainForm(etAjouterAutre = false) {
         actif: gainForm.actif,
         definitif: gainForm.definitif,
         tours_restants: gainForm.definitif ? null : Number(gainForm.tours_restants),
+        delai_tours: Number(gainForm.delai_tours),
       });
     }
     await charger();
@@ -350,7 +406,7 @@ const colonnes = [
             {{ u.username }}{{ u.is_mj ? " (MJ)" : "" }}
           </option>
         </select>
-        <button type="button" class="button" @click="ouvrirCreationVide">
+        <button type="button" class="button" @click="ouvrirCreationSelonContexte">
           + Nouvelle production
         </button>
       </div>
@@ -368,68 +424,136 @@ const colonnes = [
       v-if="ressourceIdFiltre && chronologie"
       :passe="chronologie.passe"
       :futur="chronologie.futur"
+      :futur-breakdown="chronologie.futur_breakdown || []"
+      :ressource-nom="nomRessourceFiltre"
     />
 
-    <div v-if="gainsFiltres.length === 0" class="productions-empty">
-      <template v-if="ressourceIdFiltre">
+    <!-- Vue d'ensemble : tableau par ressource -->
+    <div v-if="!ressourceIdFiltre">
+      <div v-if="productionsParRessource.length === 0" class="productions-empty">
+        Aucune production passive pour l’instant. Cliquez sur « Nouvelle production » pour choisir une ressource
+        et ajouter une ou plusieurs règles.
+      </div>
+
+      <div v-else class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Ressource</th>
+              <th>Règles</th>
+              <th>Détail (menu)</th>
+              <th class="actions"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="p in productionsParRessource" :key="p.ressource_id">
+              <td class="nom">{{ p.ressource?.nom ?? "—" }}</td>
+              <td>{{ p.gains.length }}</td>
+              <td>
+                <details>
+                  <summary class="details-summary">Détails</summary>
+                  <div class="productions-dropdown">
+                    <div
+                      v-for="g in p.gains"
+                      :key="g.id"
+                      class="prod-dropdown-row"
+                    >
+                      <span :class="['tag-balise', 'tag-balise-' + (g.balise || 'autre')]">
+                        {{ libelleBalise(g.balise || 'autre') }}
+                      </span>
+                      <span class="prix effet-cell">{{ formatEffetProduction(g) }}</span>
+                      <span v-if="g.definitif" class="tag tag-durable">Définitif</span>
+                      <span v-else class="tag tag-temp">{{ g.tours_restants }} tour(s) restant(s)</span>
+                      <span v-if="(g.delai_tours ?? 0) > 0" class="muted">
+                        Démarre dans {{ g.delai_tours }} tour(s)
+                      </span>
+                      <span class="muted">{{ g.actif ? "Actif" : "Inactif" }}</span>
+                    </div>
+                  </div>
+                </details>
+              </td>
+              <td class="actions">
+                <button
+                  type="button"
+                  class="button secondary table-row-action"
+                  @click="ouvrirDetailRessource(p.ressource_id)"
+                >
+                  Ouvrir le graphe
+                </button>
+                <button
+                  type="button"
+                  class="button secondary table-row-action"
+                  @click="ouvrirAjoutProductionPourRessource(p.ressource_id, p.ressource?.nom ?? '')"
+                >
+                  Ajouter
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Vue détaillée : une ressource -->
+    <div v-else>
+      <div v-if="gainsFiltres.length === 0" class="productions-empty">
         Aucune règle de production pour « {{ nomRessourceFiltre }} ». Utilisez « Nouvelle production » en choisissant
         cette ressource, ou revenez à
         <router-link class="inline-link" :to="{ path: '/productions', query: {} }">toutes les productions</router-link>.
-      </template>
-      <template v-else>
-        Aucune production passive pour l’instant. Cliquez sur « Nouvelle production » pour choisir une ressource
-        et ajouter une ou plusieurs règles.
-      </template>
-    </div>
+      </div>
 
-    <div v-else-if="gainsFiltres.length > 0" class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th
-              v-for="[k, lab] in colonnes"
-              :key="k"
-              class="th-sort"
-              @click="toggleSort(k)"
-            >
-              {{ lab }}{{ sortLabel(k) }}
-            </th>
-            <th class="actions"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="g in gainsTries" :key="g.id">
-            <td class="nom">{{ g.ressource?.nom ?? "—" }}</td>
-            <td>
-              <span :class="['tag-balise', 'tag-balise-' + (g.balise || 'autre')]">
-                {{ libelleBalise(g.balise || 'autre') }}
-              </span>
-            </td>
-            <td class="prix effet-cell">{{ formatEffetProduction(g) }}</td>
-            <td>
-              <span v-if="g.definitif" class="tag tag-durable">Définitif</span>
-              <span v-else class="tag tag-temp">{{ g.tours_restants }} tour(s) restant(s)</span>
-            </td>
-            <td>{{ g.actif ? "Oui" : "Non" }}</td>
-            <td class="actions">
-              <button
-                type="button"
-                class="button secondary table-row-action"
-                @click="ouvrirEditionGain(g)"
+      <div v-else class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th
+                v-for="[k, lab] in colonnes"
+                :key="k"
+                class="th-sort"
+                @click="toggleSort(k)"
               >
-                Modifier
-              </button>
-              <button
-                type="button"
-                class="button secondary table-row-action danger"
-                @click="supprimerGain(g)"
-              >
-                Supprimer
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+                {{ lab }}{{ sortLabel(k) }}
+              </th>
+              <th class="actions"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="g in gainsTries" :key="g.id">
+              <td class="nom">{{ g.ressource?.nom ?? "—" }}</td>
+              <td>
+                <span :class="['tag-balise', 'tag-balise-' + (g.balise || 'autre')]">
+                  {{ libelleBalise(g.balise || 'autre') }}
+                </span>
+              </td>
+              <td class="prix effet-cell">{{ formatEffetProduction(g) }}</td>
+              <td>
+                <span v-if="g.definitif" class="tag tag-durable">Définitif</span>
+                <span v-else class="tag tag-temp">{{ g.tours_restants }} tour(s) restant(s)</span>
+                <span v-if="(g.delai_tours ?? 0) > 0" class="muted">
+                  Démarre dans {{ g.delai_tours }} tour(s)
+                </span>
+              </td>
+              <td>{{ g.actif ? "Oui" : "Non" }}</td>
+              <td class="actions">
+                <button
+                  type="button"
+                  class="button secondary table-row-action"
+                  @click="ouvrirEditionGain(g)"
+                >
+                  Modifier
+                </button>
+                <button
+                  type="button"
+                  class="button secondary table-row-action danger"
+                  @click="supprimerGain(g)"
+                >
+                  Supprimer
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <!-- Modal -->
@@ -445,7 +569,10 @@ const colonnes = [
           Une ligne = une règle indépendante. En mode <strong>pourcentage</strong>, la valeur s’applique au stock
           <strong>avant cette ligne</strong> (plusieurs règles : ordre des identifiants).
         </p>
-        <label v-if="gainFormModal.mode === 'create'" class="form-label">
+        <label
+          v-if="gainFormModal.mode === 'create' && !gainForm.ressource_id"
+          class="form-label"
+        >
           Ressource
           <select v-model.number="gainForm.ressource_id" class="select full-width">
             <option :value="null" disabled>Choisir…</option>
@@ -457,10 +584,10 @@ const colonnes = [
         <label class="form-label">
           Justification (balise)
           <select v-model="gainForm.balise" class="select full-width">
-            <option value="science">Science</option>
-            <option value="politique">Politique</option>
-            <option value="evenement">Événement</option>
-            <option value="autre">Autre</option>
+            <option v-if="balisesDisponibles.length === 0" value="autre">Chargement…</option>
+            <option v-for="b in balisesDisponibles" :key="b.id" :value="b.id">
+              {{ b.label }}
+            </option>
           </select>
         </label>
         <div class="form-label">Mode</div>
@@ -485,16 +612,58 @@ const colonnes = [
             v-model.number="gainForm.quantite_par_tour"
             type="number"
             class="input"
+            @focus="selectGainQuantite"
           />
         </label>
         <label class="form-label checkbox-label">
           <input v-model="gainForm.definitif" type="checkbox" />
           Définitif (sans limite de tours)
         </label>
+        <label class="form-label">
+          Démarre dans
+          <input
+            v-model.number="gainForm.delai_tours"
+            type="number"
+            min="0"
+            class="input"
+          />
+          tour(s)
+        </label>
+        <div class="delay-quick-actions">
+          <button
+            type="button"
+            class="button secondary small"
+            @click="gainForm.delai_tours = 0"
+          >
+            Immédiat
+          </button>
+          <button
+            type="button"
+            class="button secondary small"
+            @click="gainForm.delai_tours = 1"
+          >
+            1 tour
+          </button>
+          <button
+            type="button"
+            class="button secondary small"
+            @click="gainForm.delai_tours = 2"
+          >
+            2 tours
+          </button>
+        </div>
         <label v-if="!gainForm.definitif" class="form-label">
           Nombre de tours restants
           <input v-model.number="gainForm.tours_restants" type="number" min="1" class="input" />
         </label>
+        <div v-if="!gainForm.definitif" class="temp-quick-actions">
+          <button type="button" class="button secondary small" @click="gainForm.tours_restants = 1">
+            1 tour
+          </button>
+          <button type="button" class="button secondary small" @click="gainForm.tours_restants = 2">
+            2 tours
+          </button>
+        </div>
         <label class="form-label checkbox-label">
           <input v-model="gainForm.actif" type="checkbox" />
           Actif
@@ -575,11 +744,74 @@ const colonnes = [
   background: #4c1d95;
   color: #e9d5ff;
 }
+.tag-balise-batiment {
+  background: #0f766e;
+  color: #b9f6f0;
+}
 .tag-balise-autre {
   background: #334155;
   color: #cbd5e1;
 }
 .effet-cell {
   white-space: nowrap;
+}
+
+.productions-dropdown {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prod-dropdown-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.temp-quick-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.delay-quick-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* Rendre le <summary> de <details> visuellement "bouton" */
+details.details-summary {
+  margin: 0;
+}
+
+.details-summary {
+  cursor: pointer;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
+.details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.details-summary::after {
+  content: "▼";
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+details[open] .details-summary::after {
+  content: "▲";
 }
 </style>

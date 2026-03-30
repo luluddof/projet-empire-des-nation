@@ -4,7 +4,11 @@ from flask import Blueprint, jsonify, request
 
 from ..extensions import db
 from ..models import Categorie, PrixRessourceHistorique, Ressource, RessourceModificateurJoueur, Utilisateur
-from ..utils.prix import appliquer_produit_categories_sur_ressource, recalcule_prix_ressource
+from ..utils.prix import (
+    appliquer_produit_categories_sur_ressource,
+    prix_derives_pour_utilisateur,
+    recalcule_prix_ressource,
+)
 from ..utils.prix_snapshot import enregistrer_snapshot_prix
 from ..utils.decorators import get_current_user, login_required, mj_required
 
@@ -27,13 +31,25 @@ def _upsert_override(utilisateur_id: str, ressource_id: int, pct: float) -> None
         )
 
 
-def _apply_modificateur_cible(me, pct: float, ressource_ids: list, cible: str, utilisateur_ids: list) -> Tuple[bool, Optional[str]]:
+def _apply_modificateur_cible(
+    me,
+    pct: float,
+    ressource_ids: list,
+    cible: str,
+    utilisateur_ids: list,
+    operation: str = "set",
+) -> Tuple[bool, Optional[str]]:
     """
     cible: tous | moi | joueurs
     - tous : met à jour le catalogue global et supprime les surcharges pour ces ressources.
     - moi / joueurs : surcharges par joueur sans changer le % catalogue global.
     """
     cible = (cible or "tous").strip().lower()
+    operation = (operation or "set").strip().lower()
+    if operation not in ("set", "add", "remove"):
+        return False, "operation invalide (set, add, remove)"
+    if operation in ("add", "remove") and pct <= 0:
+        return False, "Pour add/remove, modificateur_pct (delta) doit être > 0"
     ids = [int(x) for x in ressource_ids if x is not None]
 
     if cible == "tous":
@@ -41,7 +57,15 @@ def _apply_modificateur_cible(me, pct: float, ressource_ids: list, cible: str, u
             r = db.session.get(Ressource, rid)
             if not r:
                 continue
-            r.modificateur_pct = float(pct)
+            if operation == "set":
+                new_val = float(pct)
+            elif operation == "add":
+                new_val = float(r.modificateur_pct) + float(pct)
+            else:  # remove
+                new_val = float(r.modificateur_pct) - float(pct)
+            if new_val <= 0:
+                return False, "Résultat invalide : modificateur_pct doit rester > 0"
+            r.modificateur_pct = new_val
             recalcule_prix_ressource(r)
             enregistrer_snapshot_prix(r)
             RessourceModificateurJoueur.query.filter_by(ressource_id=rid).delete()
@@ -51,7 +75,27 @@ def _apply_modificateur_cible(me, pct: float, ressource_ids: list, cible: str, u
         for rid in ids:
             if not db.session.get(Ressource, rid):
                 continue
-            _upsert_override(me.id, rid, pct)
+            r = db.session.get(Ressource, rid)
+            row = RessourceModificateurJoueur.query.filter_by(
+                utilisateur_id=me.id, ressource_id=rid
+            ).first()
+            base = float(row.modificateur_pct) if row is not None else float(r.modificateur_pct)
+
+            if operation == "set":
+                new_val = float(pct)
+            elif operation == "add":
+                new_val = base + float(pct)
+            else:  # remove
+                new_val = base - float(pct)
+
+            if new_val <= 0:
+                return False, "Résultat invalide : modificateur_pct doit rester > 0"
+
+            # Si le nouvel état retombe exactement sur la valeur catalogue, on retire la surcharge.
+            if abs(new_val - float(r.modificateur_pct)) < 1e-9 and row is not None:
+                db.session.delete(row)
+            else:
+                _upsert_override(me.id, rid, new_val)
         return True, None
 
     if cible == "joueurs":
@@ -64,8 +108,28 @@ def _apply_modificateur_cible(me, pct: float, ressource_ids: list, cible: str, u
         for rid in ids:
             if not db.session.get(Ressource, rid):
                 continue
+            r = db.session.get(Ressource, rid)
             for uid in uids:
-                _upsert_override(uid, rid, pct)
+                row = RessourceModificateurJoueur.query.filter_by(
+                    utilisateur_id=uid, ressource_id=rid
+                ).first()
+                base = float(row.modificateur_pct) if row is not None else float(r.modificateur_pct)
+
+                if operation == "set":
+                    new_val = float(pct)
+                elif operation == "add":
+                    new_val = base + float(pct)
+                else:  # remove
+                    new_val = base - float(pct)
+
+                if new_val <= 0:
+                    return False, "Résultat invalide : modificateur_pct doit rester > 0"
+
+                # Si le nouvel état retombe exactement sur la valeur catalogue, on retire la surcharge.
+                if abs(new_val - float(r.modificateur_pct)) < 1e-9 and row is not None:
+                    db.session.delete(row)
+                else:
+                    _upsert_override(uid, rid, new_val)
         return True, None
 
     return False, "cible_modificateur invalide (tous, moi, joueurs)"
@@ -102,6 +166,41 @@ def get_ressource(ressource_id):
     if me.is_mj and request.args.get("global") == "1":
         return jsonify(r.to_dict())
     return jsonify(r.to_dict(utilisateur_id=me.id))
+
+
+@ressources_bp.get("/api/ressources/<int:ressource_id>/modificateur-joueur")
+@mj_required
+def get_modificateur_ressource_joueur(ressource_id: int):
+    r = db.get_or_404(Ressource, ressource_id)
+
+    utilisateur_ids = request.args.getlist("utilisateur_ids")
+    if not utilisateur_ids:
+        uid = request.args.get("utilisateur_id")
+        if uid:
+            utilisateur_ids = [uid]
+
+    utilisateur_ids = [
+        str(x) for x in utilisateur_ids if x is not None and str(x).strip() != ""
+    ]
+    if not utilisateur_ids:
+        return jsonify({"error": "utilisateur_id ou utilisateur_ids requis"}), 400
+
+    for uid in utilisateur_ids:
+        if not db.session.get(Utilisateur, uid):
+            return jsonify({"error": f"Joueur inconnu : {uid}"}), 400
+
+    valeurs = {}
+    for uid in utilisateur_ids:
+        derived = prix_derives_pour_utilisateur(r, uid)
+        valeurs[uid] = {
+            "modificateur_pct": float(derived["modificateur_pct"]),
+            "facteur_prix": float(derived["facteur_prix"]),
+            "prix_modifie": int(derived["prix_modifie"]),
+            "prix_achat": int(derived["prix_achat"]),
+            "prix_lointain": int(derived["prix_lointain"]),
+        }
+
+    return jsonify({"ok": True, "ressource_id": r.id, "valeurs": valeurs})
 
 
 @ressources_bp.post("/api/ressources")
@@ -158,7 +257,8 @@ def update_ressource(ressource_id):
         pct = float(data["modificateur_pct"])
         cible = (data.get("cible_modificateur") or "tous").strip().lower()
         uids = data.get("utilisateur_ids") or []
-        ok, err = _apply_modificateur_cible(me, pct, [r.id], cible, uids)
+        operation = data.get("operation") or "set"
+        ok, err = _apply_modificateur_cible(me, pct, [r.id], cible, uids, operation=operation)
         if not ok:
             return jsonify({"error": err}), 400
         if cible != "tous" and base_changed:
@@ -184,6 +284,7 @@ def bulk_prix_marche():
         return jsonify({"error": "Champ 'modificateur_pct' requis"}), 400
     pct = float(data["modificateur_pct"])
     cible = (data.get("cible_modificateur") or "tous").strip().lower()
+    operation = data.get("operation") or "set"
     uids = data.get("utilisateur_ids") or []
     me = get_current_user()
 
@@ -199,7 +300,9 @@ def bulk_prix_marche():
     if not rid_list:
         return jsonify({"error": "Aucune ressource valide"}), 400
 
-    ok, err = _apply_modificateur_cible(me, pct, rid_list, cible, uids)
+    ok, err = _apply_modificateur_cible(
+        me, pct, rid_list, cible, uids, operation=operation
+    )
     if not ok:
         return jsonify({"error": err}), 400
 
