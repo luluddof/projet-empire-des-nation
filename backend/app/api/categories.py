@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 from ..extensions import db
-from ..models import Categorie
+from ..models import Categorie, CategorieModificateurJoueur, Utilisateur
 from ..utils.prix import recalcule_prix_ressource
 from ..utils.prix_snapshot import enregistrer_snapshot_prix
 from ..utils.decorators import login_required, mj_required
@@ -43,6 +43,7 @@ def create_categorie():
 def update_categorie(categorie_id):
     c = db.get_or_404(Categorie, categorie_id)
     data = request.get_json() or {}
+    modificateur_change = "modificateur_pct" in data
     if "nom" in data and str(data["nom"]).strip():
         nouveau = str(data["nom"]).strip()
         existant = Categorie.query.filter(Categorie.nom == nouveau, Categorie.id != c.id).first()
@@ -52,10 +53,85 @@ def update_categorie(categorie_id):
     if "modificateur_pct" in data:
         c.modificateur_pct = float(data["modificateur_pct"])
     db.session.commit()
-    if data.get("propager"):
+    # Si le % change, il faut propager sur toutes les ressources liées.
+    if modificateur_change or data.get("propager"):
         _propager_prix_vers_ressources_liees(c)
         db.session.commit()
     return jsonify(c.to_dict())
+
+
+def _resolve_utilisateur_ids(data) -> list[str]:
+    utilisateur_ids = data.get("utilisateur_ids")
+    if utilisateur_ids is None:
+        uid = data.get("utilisateur_id")
+        if uid is None:
+            return []
+        utilisateur_ids = [uid]
+    if not isinstance(utilisateur_ids, list):
+        return []
+    return [str(x) for x in utilisateur_ids if x is not None and str(x).strip() != ""]
+
+
+@categories_bp.put("/api/categories/<int:categorie_id>/modificateur-joueur")
+@mj_required
+def set_modificateur_joueur(categorie_id: int):
+    c = db.get_or_404(Categorie, categorie_id)
+    data = request.get_json() or {}
+
+    supprimer = bool(data.get("supprimer", False))
+    utilisateur_ids = _resolve_utilisateur_ids(data)
+    if not utilisateur_ids:
+        return jsonify({"error": "utilisateur_id ou utilisateur_ids requis"}), 400
+
+    # Valide que les utilisateurs existent.
+    for uid in utilisateur_ids:
+        if not db.session.get(Utilisateur, uid):
+            return jsonify({"error": f"Joueur inconnu : {uid}"}), 400
+
+    if supprimer:
+        for uid in utilisateur_ids:
+            row = CategorieModificateurJoueur.query.filter_by(
+                utilisateur_id=uid, categorie_id=c.id
+            ).first()
+            if row is not None:
+                db.session.delete(row)
+        db.session.commit()
+        return jsonify({"ok": True, "categorie_id": c.id, "supprimé": True})
+
+    if "modificateur_pct" not in data:
+        return (
+            jsonify({"error": "Champ 'modificateur_pct' requis (ou 'supprimer': true)"}),
+            400,
+        )
+
+    pct = float(data["modificateur_pct"])
+    if pct <= 0:
+        return jsonify({"error": "modificateur_pct doit être > 0"}), 400
+
+    for uid in utilisateur_ids:
+        row = CategorieModificateurJoueur.query.filter_by(
+            utilisateur_id=uid, categorie_id=c.id
+        ).first()
+        if row is not None:
+            row.modificateur_pct = pct
+        else:
+            db.session.add(
+                CategorieModificateurJoueur(
+                    utilisateur_id=uid,
+                    categorie_id=c.id,
+                    modificateur_pct=pct,
+                )
+            )
+
+    db.session.commit()
+    return jsonify(
+        {
+            "ok": True,
+            "categorie_id": c.id,
+            "modificateur_pct": pct,
+            "utilisateur_ids": utilisateur_ids,
+        }
+    )
 
 
 @categories_bp.delete("/api/categories/<int:categorie_id>")

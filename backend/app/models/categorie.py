@@ -15,9 +15,25 @@ class Categorie(db.Model):
         back_populates="categories_rel",
     )
 
-    def to_dict(self):
+    def to_dict(self, utilisateur_id=None):
+        """
+        Serialisation.
+
+        - sans utilisateur_id : % catalogue global
+        - avec utilisateur_id : % effectif (surcharge éventuelle)
+        """
+        if utilisateur_id is None:
+            pct = float(self.modificateur_pct)
+        else:
+            from .categorie_modificateur_joueur import CategorieModificateurJoueur
+
+            row = CategorieModificateurJoueur.query.filter_by(
+                utilisateur_id=utilisateur_id, categorie_id=self.id
+            ).first()
+            pct = float(row.modificateur_pct) if row is not None else float(self.modificateur_pct)
+
         return {
             "id": self.id,
             "nom": self.nom,
-            "modificateur_pct": self.modificateur_pct,
+            "modificateur_pct": pct,
         }

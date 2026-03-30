@@ -53,6 +53,6 @@ class Ressource(db.Model):
             "prix_achat": p["prix_achat"],
             "prix_lointain": p["prix_lointain"],
             "modificateur_catalogue": self.modificateur_pct,
-            "categories": [c.to_dict() for c in cats],
+            "categories": [c.to_dict(utilisateur_id) for c in cats],
             "categorie_ids": [c.id for c in cats],
         }

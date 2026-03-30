@@ -64,8 +64,10 @@ chargerTransactions();
 
 const stats = computed(() => {
   const txs = data.value.transactions;
-  const gains = txs.filter((t) => t.valeur_florins > 0).reduce((s, t) => s + t.valeur_florins, 0);
-  const pertes = txs.filter((t) => t.valeur_florins < 0).reduce((s, t) => s + t.valeur_florins, 0);
+  // On classe gain / perte par le signe de la quantité (et non par la valeur_florins),
+  // car valeur_florins peut être arrondi à 0 pour de petites variations.
+  const gains = txs.filter((t) => t.quantite > 0).reduce((s, t) => s + t.valeur_florins, 0);
+  const pertes = txs.filter((t) => t.quantite < 0).reduce((s, t) => s + t.valeur_florins, 0);
   return { gains, pertes, net: gains + pertes };
 });
 
@@ -100,9 +102,9 @@ const blocsParJour = computed(() => {
       ordreJours.push(key);
     }
     const b = parJour.get(key);
-    const v = t.valeur_florins;
-    if (v > 0) b.gains.push(t);
-    else if (v < 0) b.pertes.push(t);
+    const q = t.quantite;
+    if (q > 0) b.gains.push(t);
+    else if (q < 0) b.pertes.push(t);
     else b.neutre.push(t);
   }
 

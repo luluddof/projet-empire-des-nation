@@ -20,6 +20,25 @@ def multiplicateur_effectif(r) -> float:
     return f
 
 
+def modificateur_pct_categorie_effectif(categorie, utilisateur_id) -> float:
+    """
+    % catégorie effectif pour un joueur (surcharge éventuelle).
+
+    - sinon retourne le % catalogue global de la catégorie.
+    """
+    from ..models.categorie_modificateur_joueur import CategorieModificateurJoueur
+
+    if utilisateur_id is None:
+        return float(getattr(categorie, "modificateur_pct", 100.0))
+
+    row = CategorieModificateurJoueur.query.filter_by(
+        utilisateur_id=utilisateur_id, categorie_id=categorie.id
+    ).first()
+    if row is not None:
+        return float(row.modificateur_pct)
+    return float(getattr(categorie, "modificateur_pct", 100.0))
+
+
 def recalcule_prix_ressource(r):
     m = multiplicateur_effectif(r)
     pm = int(round(r.prix_base * m))
@@ -52,7 +71,7 @@ def modificateur_pct_effectif(ressource, utilisateur_id) -> float:
 def multiplicateur_effectif_pour_utilisateur(ressource, utilisateur_id) -> float:
     f = _facteur_depuis_pct(modificateur_pct_effectif(ressource, utilisateur_id))
     for c in ressource.categories_rel:
-        f *= _facteur_depuis_pct(getattr(c, "modificateur_pct", 100))
+        f *= _facteur_depuis_pct(modificateur_pct_categorie_effectif(c, utilisateur_id))
     return f
 
 

@@ -1,4 +1,5 @@
 from .categorie import Categorie
+from .categorie_modificateur_joueur import CategorieModificateurJoueur
 from .gain_passif import GainPassif
 from .prix_historique import PrixRessourceHistorique
 from .ressource import Ressource
@@ -9,6 +10,7 @@ from .utilisateur import Utilisateur
 
 __all__ = [
     "Categorie",
+    "CategorieModificateurJoueur",
     "Ressource",
     "Utilisateur",
     "Stock",

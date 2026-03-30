@@ -385,6 +385,20 @@ const catModal = ref(false);
 const catForm = reactive({ id: null, nom: "", modificateur_pct: 100, propager: false });
 const erreurCat = ref("");
 
+// Modificateur de catégorie par joueur (surcharge)
+const catPlayerModal = ref(false);
+const catPlayerErreur = ref("");
+const catPlayerForm = reactive({
+  categorie_id: null,
+  utilisateur_id: null,
+  modificateur_pct: 100,
+});
+const catPlayerCategorieNom = computed(() => {
+  const id = catPlayerForm.categorie_id;
+  if (id == null) return "";
+  return categories.value.find((x) => x.id === id)?.nom ?? "";
+});
+
 function ouvrirNouvelleCategorie() {
   Object.assign(catForm, { id: null, nom: "", modificateur_pct: 100, propager: false });
   erreurCat.value = "";
@@ -400,6 +414,40 @@ function ouvrirEditCategorie(c) {
   });
   erreurCat.value = "";
   catModal.value = true;
+}
+
+function ouvrirModifCategorieParJoueur(c) {
+  catPlayerErreur.value = "";
+  catPlayerForm.categorie_id = c.id;
+  catPlayerForm.modificateur_pct = Number(c.modificateur_pct) || 100;
+  catPlayerForm.utilisateur_id = utilisateursListe.value?.[0]?.id ?? null;
+  catPlayerModal.value = true;
+}
+
+async function appliquerModifCategorieParJoueur(supprimer) {
+  catPlayerErreur.value = "";
+  if (catPlayerForm.categorie_id == null) {
+    catPlayerErreur.value = "Catégorie requise.";
+    return;
+  }
+  if (!catPlayerForm.utilisateur_id) {
+    catPlayerErreur.value = "Sélectionnez un joueur.";
+    return;
+  }
+
+  const payload = {
+    utilisateur_id: String(catPlayerForm.utilisateur_id),
+    supprimer: !!supprimer,
+  };
+  if (!supprimer) payload.modificateur_pct = Number(catPlayerForm.modificateur_pct);
+
+  try {
+    await put(`/api/categories/${catPlayerForm.categorie_id}/modificateur-joueur`, payload);
+    catPlayerModal.value = false;
+    await chargerCategories();
+  } catch (e) {
+    catPlayerErreur.value = e.message;
+  }
 }
 
 async function sauvegarderCategorie() {
@@ -489,6 +537,9 @@ const colonnes = [
           <div class="cat-chip-actions">
             <button type="button" class="button secondary btn-cat-lg" @click="ouvrirEditCategorie(c)">
               Modifier
+            </button>
+            <button type="button" class="button secondary btn-cat-lg" @click="ouvrirModifCategorieParJoueur(c)">
+              Par joueur
             </button>
             <button type="button" class="button btn-cat-lg btn-cat-danger" @click="supprimerCategorie(c)">
               Supprimer
@@ -665,6 +716,42 @@ const colonnes = [
         <div class="modal-footer">
           <button class="button secondary" @click="catModal = false">Annuler</button>
           <button class="button" @click="sauvegarderCategorie">Enregistrer</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="catPlayerModal" class="modal-overlay" @click.self="catPlayerModal = false">
+      <div class="modal modal-sm">
+        <h3 class="modal-title">
+          Modificateur de catégorie — {{ catPlayerCategorieNom || "…" }}
+        </h3>
+        <p v-if="catPlayerErreur" class="error">{{ catPlayerErreur }}</p>
+        <label class="form-label">
+          Joueur
+          <select v-model="catPlayerForm.utilisateur_id" class="select full-width">
+            <option v-for="u in utilisateursListe" :key="u.id" :value="u.id">
+              {{ u.username }}{{ u.is_mj ? " (MJ)" : "" }}
+            </option>
+          </select>
+        </label>
+        <label class="form-label">
+          Modificateur (%)
+          <input
+            v-model.number="catPlayerForm.modificateur_pct"
+            type="number"
+            step="0.1"
+            min="0.1"
+            class="input"
+          />
+        </label>
+        <p class="form-hint">100 % = neutre ; 80 % = ×0,8 pour ce joueur.</p>
+        <div class="modal-footer">
+          <button class="button secondary" @click="appliquerModifCategorieParJoueur(true)">
+            Réinitialiser
+          </button>
+          <button class="button" @click="appliquerModifCategorieParJoueur(false)">
+            Appliquer
+          </button>
         </div>
       </div>
     </div>
