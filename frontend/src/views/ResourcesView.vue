@@ -382,7 +382,9 @@ async function supprimerRessource(r) {
 
 // --- Panneau catégories (MJ) ---
 const catModal = ref(false);
-const catForm = reactive({ id: null, nom: "", modificateur_pct: 100, propager: false });
+const catForm = reactive({ id: null, nom: "", modificateur_pct: 100 });
+const catModMode = ref("set"); // 'set' | 'add' | 'remove'
+const catBaseModificateurPct = ref(100); // valeur avant add/remove
 const erreurCat = ref("");
 
 // Modificateur de catégorie par joueur (surcharge)
@@ -390,7 +392,7 @@ const catPlayerModal = ref(false);
 const catPlayerErreur = ref("");
 const catPlayerForm = reactive({
   categorie_id: null,
-  utilisateur_id: null,
+  utilisateur_ids: [],
   modificateur_pct: 100,
 });
 const catPlayerCategorieNom = computed(() => {
@@ -400,7 +402,9 @@ const catPlayerCategorieNom = computed(() => {
 });
 
 function ouvrirNouvelleCategorie() {
-  Object.assign(catForm, { id: null, nom: "", modificateur_pct: 100, propager: false });
+  Object.assign(catForm, { id: null, nom: "", modificateur_pct: 100 });
+  catModMode.value = "set";
+  catBaseModificateurPct.value = 100;
   erreurCat.value = "";
   catModal.value = true;
 }
@@ -410,8 +414,9 @@ function ouvrirEditCategorie(c) {
     id: c.id,
     nom: c.nom,
     modificateur_pct: c.modificateur_pct,
-    propager: false,
   });
+  catModMode.value = "set";
+  catBaseModificateurPct.value = Number(c.modificateur_pct) || 100;
   erreurCat.value = "";
   catModal.value = true;
 }
@@ -420,8 +425,21 @@ function ouvrirModifCategorieParJoueur(c) {
   catPlayerErreur.value = "";
   catPlayerForm.categorie_id = c.id;
   catPlayerForm.modificateur_pct = Number(c.modificateur_pct) || 100;
-  catPlayerForm.utilisateur_id = utilisateursListe.value?.[0]?.id ?? null;
+  catPlayerForm.utilisateur_ids = utilisateursListe.value?.[0]?.id
+    ? [String(utilisateursListe.value[0].id)]
+    : [];
   catPlayerModal.value = true;
+}
+
+function catPlayerUserSelected(uid) {
+  return catPlayerForm.utilisateur_ids.includes(String(uid));
+}
+
+function toggleCatPlayerUser(uid) {
+  const sid = String(uid);
+  const i = catPlayerForm.utilisateur_ids.indexOf(sid);
+  if (i >= 0) catPlayerForm.utilisateur_ids.splice(i, 1);
+  else catPlayerForm.utilisateur_ids.push(sid);
 }
 
 async function appliquerModifCategorieParJoueur(supprimer) {
@@ -430,13 +448,13 @@ async function appliquerModifCategorieParJoueur(supprimer) {
     catPlayerErreur.value = "Catégorie requise.";
     return;
   }
-  if (!catPlayerForm.utilisateur_id) {
-    catPlayerErreur.value = "Sélectionnez un joueur.";
+  if (!catPlayerForm.utilisateur_ids || catPlayerForm.utilisateur_ids.length === 0) {
+    catPlayerErreur.value = "Sélectionnez au moins un joueur.";
     return;
   }
 
   const payload = {
-    utilisateur_id: String(catPlayerForm.utilisateur_id),
+    utilisateur_ids: catPlayerForm.utilisateur_ids,
     supprimer: !!supprimer,
   };
   if (!supprimer) payload.modificateur_pct = Number(catPlayerForm.modificateur_pct);
@@ -459,10 +477,19 @@ async function sauvegarderCategorie() {
         modificateur_pct: Number(catForm.modificateur_pct),
       });
     } else {
+      const input = Number(catForm.modificateur_pct);
+      const base = Number(catBaseModificateurPct.value);
+      let newPct;
+      if (catModMode.value === "set") newPct = input;
+      else if (catModMode.value === "add") newPct = base + input;
+      else newPct = base - input;
+      if (!Number.isFinite(newPct) || newPct <= 0) {
+        erreurCat.value = "modificateur_pct doit rester > 0.";
+        return;
+      }
       await put(`/api/categories/${catForm.id}`, {
         nom: catForm.nom,
-        modificateur_pct: Number(catForm.modificateur_pct),
-        propager: catForm.propager,
+        modificateur_pct: newPct,
       });
     }
     catModal.value = false;
@@ -504,7 +531,7 @@ const colonnes = [
         <h2 class="page-title">Catalogue des ressources</h2>
         <p class="page-subtitle">
           <template v-if="isMj">
-            Modificateurs en % (100 % = neutre). Facteur total = ( % ressource / 100 ) × ∏( % catégorie / 100 ).
+            Modificateurs en % (100 % = neutre). Facteur total = ( % ressource / 100 ) × moyenne( % catégorie / 100 ).
             Tableau : <strong>prix catalogue</strong> (global). Vous pouvez appliquer un % à tout le monde, à vous seul ou à des joueurs choisis.
           </template>
           <template v-else>
@@ -526,7 +553,7 @@ const colonnes = [
       </div>
       <p class="section-hint">
         Par défaut 100 %. Une nouvelle ressource est à 100 % et les prix intègrent automatiquement les % des catégories cochées.
-        « Propager » sur une catégorie recalcule les prix de toutes les ressources qui l’utilisent.
+        La modification d’une catégorie propage automatiquement les prix des ressources liées.
       </p>
       <div class="cat-chips">
         <div v-for="c in categories" :key="c.id" class="cat-chip cat-chip-row">
@@ -705,14 +732,33 @@ const colonnes = [
         <h3 class="modal-title">{{ catForm.id == null ? "Nouvelle catégorie" : "Modifier la catégorie" }}</h3>
         <p v-if="erreurCat" class="error">{{ erreurCat }}</p>
         <label class="form-label">Nom<input v-model="catForm.nom" class="input" /></label>
-        <label class="form-label">Modificateur (%)
-          <input v-model.number="catForm.modificateur_pct" type="number" step="0.1" min="0.1" class="input" />
+        <div v-if="catForm.id != null" class="cible-mod-block">
+          <div class="cible-mod-title">Mise à jour</div>
+          <label class="radio-line">
+            <input v-model="catModMode" type="radio" value="set" />
+            Définir
+          </label>
+          <label class="radio-line">
+            <input v-model="catModMode" type="radio" value="add" />
+            Ajouter
+          </label>
+          <label class="radio-line">
+            <input v-model="catModMode" type="radio" value="remove" />
+            Retirer
+          </label>
+        </div>
+        <label class="form-label">
+          <span v-if="catForm.id == null || catModMode === 'set'">Modificateur (%)</span>
+          <span v-else>Delta (%)</span>
+          <input
+            v-model.number="catForm.modificateur_pct"
+            type="number"
+            step="0.1"
+            min="0.1"
+            class="input"
+          />
         </label>
-        <p class="form-hint">100 % = aucun effet sur le facteur ; 120 % = ×1,2 pour cette catégorie.</p>
-        <label v-if="catForm.id != null" class="form-label checkbox-label">
-          <input v-model="catForm.propager" type="checkbox" />
-          Propager : recalculer les prix de toutes les ressources liées à cette catégorie
-        </label>
+        <p class="form-hint">Propagation automatique sur toutes les ressources liées.</p>
         <div class="modal-footer">
           <button class="button secondary" @click="catModal = false">Annuler</button>
           <button class="button" @click="sauvegarderCategorie">Enregistrer</button>
@@ -727,12 +773,17 @@ const colonnes = [
         </h3>
         <p v-if="catPlayerErreur" class="error">{{ catPlayerErreur }}</p>
         <label class="form-label">
-          Joueur
-          <select v-model="catPlayerForm.utilisateur_id" class="select full-width">
-            <option v-for="u in utilisateursListe" :key="u.id" :value="u.id">
+          Joueurs
+          <div class="user-pick-grid">
+            <label v-for="u in utilisateursListe" :key="u.id" class="checkbox-label user-pick-item">
+              <input
+                type="checkbox"
+                :checked="catPlayerUserSelected(u.id)"
+                @change="toggleCatPlayerUser(u.id)"
+              />
               {{ u.username }}{{ u.is_mj ? " (MJ)" : "" }}
-            </option>
-          </select>
+            </label>
+          </div>
         </label>
         <label class="form-label">
           Modificateur (%)

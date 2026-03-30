@@ -14,10 +14,19 @@ def _facteur_depuis_pct(pct) -> float:
 
 
 def multiplicateur_effectif(r) -> float:
+    """
+    Facteur prix catalogue global.
+
+    Règle métier (cf. demande utilisateur) :
+    - inflation ressource indépendante : (pct_ressource / 100)
+    - inflation due aux catégories : moyenne des (pct_categorie / 100)
+    """
     f = _facteur_depuis_pct(getattr(r, "modificateur_pct", 100))
-    for c in r.categories_rel:
-        f *= _facteur_depuis_pct(getattr(c, "modificateur_pct", 100))
-    return f
+    cats = list(getattr(r, "categories_rel", []) or [])
+    if not cats:
+        return f
+    avg = sum(_facteur_depuis_pct(getattr(c, "modificateur_pct", 100)) for c in cats) / len(cats)
+    return f * avg
 
 
 def modificateur_pct_categorie_effectif(categorie, utilisateur_id) -> float:
@@ -69,10 +78,20 @@ def modificateur_pct_effectif(ressource, utilisateur_id) -> float:
 
 
 def multiplicateur_effectif_pour_utilisateur(ressource, utilisateur_id) -> float:
+    """
+    Facteur prix effectif pour un joueur :
+    - facteur ressource (surcharge joueur ou catalogue global)
+    - facteur catégories = moyenne des facteurs catégories effectifs pour ce joueur
+    """
     f = _facteur_depuis_pct(modificateur_pct_effectif(ressource, utilisateur_id))
-    for c in ressource.categories_rel:
-        f *= _facteur_depuis_pct(modificateur_pct_categorie_effectif(c, utilisateur_id))
-    return f
+    cats = list(getattr(ressource, "categories_rel", []) or [])
+    if not cats:
+        return f
+    avg = sum(
+        _facteur_depuis_pct(modificateur_pct_categorie_effectif(c, utilisateur_id))
+        for c in cats
+    ) / len(cats)
+    return f * avg
 
 
 def prix_derives_pour_utilisateur(ressource, utilisateur_id) -> dict:
