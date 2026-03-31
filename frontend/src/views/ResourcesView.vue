@@ -13,6 +13,7 @@ const props = defineProps({
 
 const { get, post, put, del } = useApi();
 const isMj = computed(() => props.authState.user?.is_mj);
+const currentUserIdStr = computed(() => String(props.authState.user?.id ?? ""));
 
 const ressources = ref([]);
 const categories = ref([]);
@@ -21,6 +22,39 @@ const recherche = ref("");
 const filtreCategorieId = ref("");
 
 const sort = reactive({ key: "nom", dir: "asc" });
+
+// MJ : point de vue sur le catalogue (auto-complétion)
+// - non MJ : toujours soi-même (pas de choix)
+// - MJ : choix = 'global' ou un utilisateur_id
+const mjVueChoix = ref("global");
+const mjVueOpen = ref(false);
+const mjVueSearch = ref("");
+const mjVueLabel = computed(() => {
+  if (!isMj.value) return `Vous — ${props.authState.user?.username ?? ""}`;
+  if (mjVueChoix.value === "global") return "Global (catalogue)";
+  const u = (utilisateursListe.value || []).find((x) => String(x.id) === String(mjVueChoix.value));
+  if (!u) return `Vous voyez : ${mjVueChoix.value}`;
+  const isMe = String(u.id) === currentUserIdStr.value;
+  return isMe
+    ? `Vous — ${u.username}${u.is_mj ? " (MJ)" : ""}`
+    : `Vous voyez : ${u.username}${u.is_mj ? " (MJ)" : ""}`;
+});
+const mjVueQueryNorm = computed(() => mjVueSearch.value.trim().toLowerCase());
+const mjVueAutres = computed(() => {
+  const q = mjVueQueryNorm.value;
+  const all = (utilisateursListe.value || []);
+  if (!q) return all;
+  return all.filter(
+    (u) =>
+      String(u.username || "").toLowerCase().includes(q) || String(u.id).includes(q),
+  );
+});
+
+function mjVueSetChoix(val) {
+  mjVueChoix.value = val;
+  mjVueOpen.value = false;
+  mjVueSearch.value = "";
+}
 
 function formatPct(v) {
   const n = Number(v);
@@ -39,7 +73,11 @@ async function chargerCategories() {
 
 async function chargerRessources() {
   try {
-    const q = isMj.value ? "?global=1" : "";
+    let q = "";
+    if (isMj.value) {
+      if (mjVueChoix.value === "global") q = "?global=1";
+      else q = `?as_user_id=${encodeURIComponent(String(mjVueChoix.value).trim())}`;
+    }
     ressources.value = await get(`/api/ressources${q}`);
   } catch (e) {
     erreur.value = e.message;
@@ -68,6 +106,25 @@ watch(isMj, () => {
   chargerRessources();
   chargerUtilisateurs();
 });
+
+watch(
+  () => [isMj.value, mjVueChoix.value],
+  () => {
+    if (isMj.value) void chargerRessources();
+  }
+);
+
+// MJ : par défaut, voir "soi" plutôt que global (pour suivre ses surcharges)
+watch(
+  () => [isMj.value, currentUserIdStr.value, (utilisateursListe.value || []).length],
+  () => {
+    if (!isMj.value) return;
+    if (mjVueChoix.value === "global") {
+      const me = (utilisateursListe.value || []).find((u) => String(u.id) === currentUserIdStr.value);
+      if (me) mjVueChoix.value = String(me.id);
+    }
+  }
+);
 
 function previewPrix(prixBase, facteur) {
   const m = Number(facteur) || 1;
@@ -160,8 +217,9 @@ const listeManufacture = computed(() =>
 const selectedIds = ref([]);
 const bulkModal = ref(false);
 const bulkPct = ref(100);
-const bulkCible = ref("tous");
+const bulkModMode = ref("set"); // 'set' | 'add' | 'remove'
 const bulkUserIds = ref([]);
+const bulkUserSearch = ref("");
 const bulkErr = ref("");
 const bulkLoading = ref(false);
 
@@ -183,7 +241,7 @@ function selectionnerToutListe(liste) {
   selectedIds.value = [...set];
 }
 
-function selectionnerVueFiltree() {
+function selectionnerVueFiltre() {
   const ids = ressourcesFiltrees.value.filter((r) => r.nom !== FLORINS_NOM).map((r) => r.id);
   selectedIds.value = [...new Set(ids)];
 }
@@ -202,24 +260,74 @@ function bulkUserSelected(uid) {
   return bulkUserIds.value.includes(uid);
 }
 
+const bulkUserSearchNorm = computed(() => bulkUserSearch.value.trim().toLowerCase());
+const bulkUserSelectedSet = computed(() => new Set((bulkUserIds.value || []).map(String)));
+const bulkUserSearchResults = computed(() => {
+  const q = bulkUserSearchNorm.value;
+  const all = utilisateursListe.value || [];
+  if (!q) return all;
+  return all.filter(
+    (u) =>
+      String(u.username || "").toLowerCase().includes(q) || String(u.id).includes(q),
+  );
+});
+const bulkUserVisibleJoueurs = computed(() => {
+  const q = bulkUserSearchNorm.value;
+  const selected = bulkUserSelectedSet.value;
+
+  const listPourRecherche = q ? bulkUserSearchResults.value : utilisateursListe.value || [];
+  let resultsSansSelection = listPourRecherche.filter((u) => !selected.has(String(u.id)));
+  const selectedExtras = (utilisateursListe.value || []).filter((u) => selected.has(String(u.id)));
+
+  const uid = currentUserIdStr.value;
+  if (uid) {
+    const cur = (utilisateursListe.value || []).find((u) => String(u.id) === uid);
+    if (cur && !selected.has(String(cur.id))) {
+      const alreadyPresent = resultsSansSelection.some((u) => String(u.id) === uid);
+      if (!alreadyPresent) resultsSansSelection = [cur, ...resultsSansSelection];
+    }
+  }
+
+  const combined = [...resultsSansSelection, ...selectedExtras];
+  if (uid) {
+    const cur = combined.find((u) => String(u.id) === uid);
+    if (cur) return [cur, ...combined.filter((u) => String(u.id) !== uid)];
+  }
+  return combined;
+});
+
+watch(
+  () => bulkModal.value,
+  (open) => {
+    if (!open) return;
+    // Par défaut : si le MJ regarde "comme" un joueur, on pré-sélectionne ce joueur.
+    if (isMj.value && mjVueChoix.value !== "global" && String(mjVueChoix.value).trim() !== "") {
+      bulkUserIds.value = [String(mjVueChoix.value)];
+    } else {
+      bulkUserIds.value = [];
+    }
+    bulkUserSearch.value = "";
+    bulkErr.value = "";
+    bulkLoading.value = false;
+    bulkModMode.value = "set";
+  }
+);
+
 async function appliquerBulkPrix() {
   bulkErr.value = "";
   if (selectedIds.value.length === 0) {
     bulkErr.value = "Sélectionnez au moins une ressource.";
     return;
   }
-  if (bulkCible.value === "joueurs" && bulkUserIds.value.length === 0) {
-    bulkErr.value = "Sélectionnez au moins un joueur.";
-    return;
-  }
   bulkLoading.value = true;
   try {
+    const cible = bulkUserIds.value.length > 0 ? "joueurs" : "tous";
     await post("/api/ressources/bulk-prix-marche", {
       ids: selectedIds.value,
       modificateur_pct: Number(bulkPct.value),
-      cible_modificateur: bulkCible.value,
-      utilisateur_ids:
-        bulkCible.value === "joueurs" ? [...bulkUserIds.value] : [],
+      operation: bulkModMode.value,
+      cible_modificateur: cible,
+      utilisateur_ids: cible === "joueurs" ? [...bulkUserIds.value] : [],
     });
     bulkModal.value = false;
     await chargerRessources();
@@ -282,6 +390,17 @@ const previewFacteur = computed(() => {
 });
 
 const preview = computed(() => previewPrix(form.prix_base, previewFacteur.value));
+
+// La sélection joueur(s) gouverne automatiquement la cible :
+// - vide => "tous" (catalogue global)
+// - non-vide => "joueurs" (surcharges)
+watch(
+  () => (form.utilisateur_ids || []).slice().sort().join("|"),
+  () => {
+    if (!modeEdition.value) return;
+    form.cible_modificateur = form.utilisateur_ids.length > 0 ? "joueurs" : "tous";
+  }
+);
 
 function ouvrirCreation() {
   Object.assign(form, {
@@ -356,14 +475,7 @@ async function appliquerProduitCategories() {
 
 async function sauvegarderRessource() {
   erreurModal.value = "";
-  if (
-    modeEdition.value &&
-    form.cible_modificateur === "joueurs" &&
-    form.utilisateur_ids.length === 0
-  ) {
-    erreurModal.value = "Sélectionnez au moins un joueur pour cette cible.";
-    return;
-  }
+  // La cible "joueurs" devient automatiquement "tous" si la liste est vide.
   const payload = {
     nom: form.nom,
     type: form.type,
@@ -378,13 +490,31 @@ async function sauvegarderRessource() {
     payload.operation = resModMode.value;
   }
   try {
+    let saved;
     if (modeEdition.value) {
-      await put(`/api/ressources/${form.id}`, payload);
+      saved = await put(`/api/ressources/${form.id}`, payload);
     } else {
-      await post("/api/ressources", payload);
+      saved = await post("/api/ressources", payload);
     }
-    await chargerRessources();
     modalVisible.value = false;
+
+    // Mise à jour immédiate du front (sans attendre un refetch).
+    // Si on vient d'appliquer une surcharge "joueurs", le tableau MJ (catalogue global)
+    // ne reflète pas cette surcharge : on évite donc de remplacer la ligne avec une réponse globale.
+    const isOverrideJoueurs =
+      modeEdition.value &&
+      form.cible_modificateur === "joueurs" &&
+      (form.utilisateur_ids || []).length > 0;
+
+    if (!isOverrideJoueurs && saved && saved.id != null) {
+      const idx = ressources.value.findIndex((r) => r.id === saved.id);
+      if (idx >= 0) ressources.value.splice(idx, 1, saved);
+      else ressources.value.unshift(saved);
+    }
+
+    // Resync (best-effort) pour refléter le backend.
+    void chargerRessources();
+    void chargerResPlayerEtat();
   } catch (e) {
     erreurModal.value = e.message;
   }
@@ -430,7 +560,6 @@ const catPlayerSearchNorm = computed(() => catPlayerSearch.value.trim().toLowerC
 const catPlayerSelectedSet = computed(() =>
   new Set((catPlayerForm.utilisateur_ids || []).map(String)),
 );
-const currentUserIdStr = computed(() => String(props.authState.user?.id ?? ""));
 const catPlayerSearchResults = computed(() => {
   const q = catPlayerSearchNorm.value;
   const all = utilisateursListe.value || [];
@@ -525,24 +654,33 @@ const resPlayerSearchResults = computed(() => {
   );
 });
 const resPlayerVisibleJoueurs = computed(() => {
-  if (form.cible_modificateur !== "joueurs") return [];
-
   const q = resPlayerSearchNorm.value;
   const selected = resPlayerSelectedSet.value;
 
   const listPourRecherche = q ? resPlayerSearchResults.value : utilisateursListe.value || [];
-  const resultsSansSelection = listPourRecherche.filter((u) => !selected.has(String(u.id)));
+  let resultsSansSelection = listPourRecherche.filter((u) => !selected.has(String(u.id)));
   const selectedExtras = (utilisateursListe.value || []).filter((u) => selected.has(String(u.id)));
 
+  // Ajout spécifique de l'utilisateur courant : même si sa recherche ne match pas,
+  // il doit quand même apparaître en premier.
   const uid = currentUserIdStr.value;
-  const currentFirst = (list) => {
-    if (!uid) return list;
-    const cur = list.find((u) => String(u.id) === uid);
-    if (!cur) return list;
-    return [cur, ...list.filter((u) => String(u.id) !== uid)];
-  };
+  if (uid) {
+    const cur = (utilisateursListe.value || []).find((u) => String(u.id) === uid);
+    if (cur && !selected.has(String(cur.id))) {
+      const alreadyPresent = resultsSansSelection.some((u) => String(u.id) === uid);
+      if (!alreadyPresent) resultsSansSelection = [cur, ...resultsSansSelection];
+    }
+  }
 
-  return [...currentFirst(resultsSansSelection), ...currentFirst(selectedExtras)];
+  const combined = [...resultsSansSelection, ...selectedExtras];
+  if (uid) {
+    const cur = combined.find((u) => String(u.id) === uid);
+    if (cur) {
+      return [cur, ...combined.filter((u) => String(u.id) !== uid)];
+    }
+  }
+
+  return combined;
 });
 
 const resPlayerEtat = ref({}); // uid -> {modificateur_pct, facteur_prix, ...}
@@ -778,6 +916,61 @@ const colonnes = [
         </p>
       </div>
       <div v-if="isMj" class="header-actions">
+        <div class="mj-view-select">
+          <div class="mj-view-label">Voir comme</div>
+          <div class="mj-view-autocomplete" @keydown.esc="mjVueOpen = false">
+            <input
+              class="input mj-view-input"
+              :value="mjVueLabel"
+              readonly
+              @focus="mjVueOpen = true"
+              @click="mjVueOpen = !mjVueOpen"
+            />
+            <div v-if="mjVueOpen" class="mj-view-menu">
+              <div class="mj-view-section">
+                <div class="mj-view-section-title">Choix actuel</div>
+                <button type="button" class="mj-view-option is-active" @click="mjVueSetChoix(mjVueChoix)">
+                  {{ mjVueLabel }}
+                </button>
+              </div>
+
+              <div class="mj-view-sep"></div>
+
+              <div class="mj-view-section">
+                <div class="mj-view-section-title">Global</div>
+                <button type="button" class="mj-view-option" @click="mjVueSetChoix('global')">
+                  Global (catalogue)
+                </button>
+              </div>
+
+              <div class="mj-view-sep"></div>
+
+              <div class="mj-view-section">
+                <div class="mj-view-section-title">Joueurs</div>
+                <input
+                  v-model="mjVueSearch"
+                  class="input mj-view-search"
+                  placeholder="Rechercher un joueur…"
+                />
+                <div class="mj-view-list">
+                  <button
+                    v-for="u in mjVueAutres"
+                    :key="u.id"
+                    type="button"
+                    class="mj-view-option"
+                    @click="mjVueSetChoix(String(u.id))"
+                  >
+                    <template v-if="String(u.id) === currentUserIdStr">Vous — {{ u.username }}</template>
+                    <template v-else>{{ u.username }}</template>{{ u.is_mj ? " (MJ)" : "" }}
+                  </button>
+                  <div v-if="mjVueAutres.length === 0" class="muted mj-view-empty">
+                    Aucun résultat.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
         <button class="button" @click="ouvrirCreation">+ Ressource</button>
       </div>
     </div>
@@ -924,35 +1117,53 @@ const colonnes = [
           S’applique aux <strong>{{ selectedIds.length }}</strong> ressource(s) sélectionnée(s).
         </p>
         <p v-if="bulkErr" class="error">{{ bulkErr }}</p>
+        <div class="cible-mod-block">
+          <div class="cible-mod-title">Mise à jour</div>
+          <label class="radio-line">
+            <input v-model="bulkModMode" type="radio" value="set" />
+            Définir
+          </label>
+          <label class="radio-line">
+            <input v-model="bulkModMode" type="radio" value="add" />
+            Ajouter
+          </label>
+          <label class="radio-line">
+            <input v-model="bulkModMode" type="radio" value="remove" />
+            Retirer
+          </label>
+        </div>
         <label class="form-label">
-          Nouveau % modificateur ressource
+          <span v-if="bulkModMode === 'set'">Nouveau % modificateur ressource</span>
+          <span v-else>Delta (%) sur % ressource</span>
           <input v-model.number="bulkPct" type="number" step="0.1" min="0.1" class="input" />
         </label>
-        <div class="cible-mod-block">
-          <div class="cible-mod-title">Cible</div>
-          <label class="radio-line">
-            <input v-model="bulkCible" type="radio" value="tous" />
-            Tous les joueurs (met à jour le catalogue et retire les surcharges sur ces ressources)
-          </label>
-          <label class="radio-line">
-            <input v-model="bulkCible" type="radio" value="moi" />
-            Moi uniquement (surcharge sur mon compte)
-          </label>
-          <label class="radio-line">
-            <input v-model="bulkCible" type="radio" value="joueurs" />
-            Joueurs sélectionnés (comptes Discord liés)
-          </label>
-          <div v-if="bulkCible === 'joueurs'" class="user-pick-grid">
-            <label v-for="u in utilisateursListe" :key="u.id" class="checkbox-label user-pick-item">
+        <label class="form-label">
+          Joueurs
+          <input
+            v-model="bulkUserSearch"
+            type="text"
+            placeholder="Rechercher un joueur…"
+            class="input player-search"
+          />
+          <div class="player-picker-list">
+            <label
+              v-for="u in bulkUserVisibleJoueurs"
+              :key="u.id"
+              class="checkbox-label user-pick-item"
+            >
               <input
                 type="checkbox"
                 :checked="bulkUserSelected(u.id)"
                 @change="toggleBulkUser(u.id)"
               />
-              {{ u.username }}
+              <template v-if="String(u.id) === currentUserIdStr">Vous — {{ u.username }}</template>
+              <template v-else>{{ u.username }}</template>{{ u.is_mj ? " (MJ)" : "" }}
             </label>
           </div>
-        </div>
+        </label>
+        <p class="form-hint">
+          Si aucun joueur n’est sélectionné : modification du catalogue global (tous).
+        </p>
         <div class="modal-footer">
           <button class="button secondary" :disabled="bulkLoading" @click="bulkModal = false">Annuler</button>
           <button class="button" :disabled="bulkLoading" @click="appliquerBulkPrix">
@@ -1013,7 +1224,8 @@ const colonnes = [
                 :checked="catPlayerUserSelected(u.id)"
                 @change="toggleCatPlayerUser(u.id)"
               />
-              {{ u.username }}{{ u.is_mj ? " (MJ)" : "" }}
+              <template v-if="String(u.id) === currentUserIdStr">Vous — {{ u.username }}</template>
+              <template v-else>{{ u.username }}</template>{{ u.is_mj ? " (MJ)" : "" }}
             </label>
           </div>
         </label>
@@ -1098,19 +1310,9 @@ const colonnes = [
                 : "ajouter/retirer ce delta sur le % ressource à :"
             }}
           </div>
-          <label class="radio-line">
-            <input v-model="form.cible_modificateur" type="radio" value="tous" />
-            Tous les joueurs (catalogue ; supprime les surcharges sur cette ressource)
-          </label>
-          <label class="radio-line">
-            <input v-model="form.cible_modificateur" type="radio" value="moi" />
-            Moi uniquement (surcharge)
-          </label>
-          <label class="radio-line">
-            <input v-model="form.cible_modificateur" type="radio" value="joueurs" />
-            Joueurs sélectionnés
-          </label>
-          <div v-if="form.cible_modificateur === 'joueurs'" class="user-pick-grid">
+
+          <label class="form-label">
+            Joueurs
             <input
               v-model="resPlayerSearch"
               type="text"
@@ -1128,31 +1330,41 @@ const colonnes = [
                   :checked="formUserSelected(u.id)"
                   @change="toggleFormUser(u.id)"
                 />
-                {{ u.username }}
+                <template v-if="String(u.id) === currentUserIdStr">Vous — {{ u.username }}</template>
+                <template v-else>{{ u.username }}</template>
               </label>
             </div>
+          </label>
 
-            <div v-if="(form.utilisateur_ids || []).length > 0" class="state-block">
-              <div class="state-title">
-                État actuel (ressource) chez les joueurs sélectionnés
-              </div>
-              <div class="state-rows">
-                <div
-                  v-for="uid in form.utilisateur_ids"
-                  :key="uid"
-                  class="state-row"
-                >
-                  <span class="state-player">
-                    {{ utilisateursListe.find((u) => String(u.id) === String(uid))?.username || uid }}
+          <p class="form-hint">
+            Si aucun joueur n’est sélectionné : modification du catalogue global (tous). Si tu sélectionnes des joueurs,
+            tu modifies une surcharge par joueur : le tableau MJ (catalogue) reste global, et l’état est visible ci‑dessous.
+          </p>
+
+          <div v-if="(form.utilisateur_ids || []).length > 0" class="state-block">
+            <div class="state-title">État actuel (ressource) chez les joueurs sélectionnés</div>
+            <div class="state-rows">
+              <div
+                v-for="uid in form.utilisateur_ids"
+                :key="uid"
+                class="state-row"
+              >
+                <span class="state-player">
+                  {{
+                    utilisateursListe.find((u) => String(u.id) === String(uid))
+                      ?.username || uid
+                  }}
+                </span>
+                <span class="state-val">
+                  {{ formatPct(resPlayerEtat[uid]?.modificateur_pct ?? 100) }}
+                  <span class="muted">
+                    — ×{{ (resPlayerEtat[uid]?.facteur_prix ?? 1).toFixed(2) }}
                   </span>
-                  <span class="state-val">
-                    {{ formatPct(resPlayerEtat[uid]?.modificateur_pct ?? 100) }}
-                  </span>
-                </div>
+                </span>
               </div>
-              <div v-if="resPlayerEtatLoading" class="muted">Chargement…</div>
-              <div v-if="resPlayerEtatErreur" class="error">{{ resPlayerEtatErreur }}</div>
             </div>
+            <div v-if="resPlayerEtatLoading" class="muted">Chargement…</div>
+            <div v-if="resPlayerEtatErreur" class="error">{{ resPlayerEtatErreur }}</div>
           </div>
         </div>
         <p class="form-hint">Nouvelle ressource : 100 % par défaut ; les catégories cochées appliquent leur % dans le facteur total.</p>
@@ -1257,5 +1469,98 @@ const colonnes = [
 .state-val {
   color: #93c5fd;
   white-space: nowrap;
+}
+
+.mj-view-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-right: 12px;
+}
+
+.mj-view-label {
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.mj-view-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.mj-view-autocomplete {
+  position: relative;
+}
+
+.mj-view-input {
+  min-width: 340px;
+  cursor: pointer;
+}
+
+.mj-view-menu {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 420px;
+  max-width: 80vw;
+  background: #0b1220;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 10px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+}
+
+.mj-view-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #94a3b8;
+  margin: 2px 0 8px;
+}
+
+.mj-view-option {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.mj-view-option:hover {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+.mj-view-option.is-active {
+  background: rgba(147, 197, 253, 0.12);
+  border-color: rgba(147, 197, 253, 0.25);
+}
+
+.mj-view-sep {
+  height: 1px;
+  background: rgba(148, 163, 184, 0.2);
+  margin: 10px 0;
+}
+
+.mj-view-search {
+  width: 100%;
+}
+
+.mj-view-list {
+  margin-top: 10px;
+  max-height: 260px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mj-view-empty {
+  padding: 8px 10px;
 }
 </style>

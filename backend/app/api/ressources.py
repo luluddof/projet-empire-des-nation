@@ -153,8 +153,15 @@ def _assign_categories(r: Ressource, categorie_ids):
 def list_ressources():
     me = get_current_user()
     ressources = Ressource.query.order_by(Ressource.nom).all()
-    if me.is_mj and request.args.get("global") == "1":
-        return jsonify([r.to_dict() for r in ressources])
+    if me.is_mj:
+        as_uid = request.args.get("as_user_id")
+        if as_uid is not None and str(as_uid).strip() != "":
+            as_uid = str(as_uid).strip()
+            if not db.session.get(Utilisateur, as_uid):
+                return jsonify({"error": f"Joueur inconnu : {as_uid}"}), 400
+            return jsonify([r.to_dict(utilisateur_id=as_uid) for r in ressources])
+        if request.args.get("global") == "1":
+            return jsonify([r.to_dict() for r in ressources])
     return jsonify([r.to_dict(utilisateur_id=me.id) for r in ressources])
 
 
@@ -163,8 +170,15 @@ def list_ressources():
 def get_ressource(ressource_id):
     me = get_current_user()
     r = db.get_or_404(Ressource, ressource_id)
-    if me.is_mj and request.args.get("global") == "1":
-        return jsonify(r.to_dict())
+    if me.is_mj:
+        as_uid = request.args.get("as_user_id")
+        if as_uid is not None and str(as_uid).strip() != "":
+            as_uid = str(as_uid).strip()
+            if not db.session.get(Utilisateur, as_uid):
+                return jsonify({"error": f"Joueur inconnu : {as_uid}"}), 400
+            return jsonify(r.to_dict(utilisateur_id=as_uid))
+        if request.args.get("global") == "1":
+            return jsonify(r.to_dict())
     return jsonify(r.to_dict(utilisateur_id=me.id))
 
 

@@ -112,6 +112,17 @@ def test_ressource_modificateur_joueur_add_remove(
     assert abs(ra["modificateur_pct"] - 80.0) < 1e-6
     assert abs(rb["modificateur_pct"] - 120.0) < 1e-6
 
+    # Vue MJ "comme un joueur"
+    as_a = client_mj.get(f"/api/ressources/{rid}?as_user_id=100")
+    assert as_a.status_code == 200
+    assert abs(as_a.get_json()["modificateur_pct"] - 80.0) < 1e-6
+
+    as_list = client_mj.get("/api/ressources?as_user_id=101")
+    assert as_list.status_code == 200
+    # Argent/Aciers seed => au moins la ressource rid doit être présente
+    row = [x for x in as_list.get_json() if x["id"] == rid][0]
+    assert abs(row["modificateur_pct"] - 120.0) < 1e-6
+
     # +10 (delta) => 90 et 130
     r3 = client_mj.put(
         f"/api/ressources/{rid}",
