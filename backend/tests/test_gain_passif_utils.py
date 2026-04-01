@@ -37,8 +37,8 @@ def test_net_un_tour_tri_par_id():
     g1 = SimpleNamespace(
         id=1, actif=True, quantite_par_tour=10, mode_production="fixe", tours_restants=None
     )
-    # stock 100 : +10 -> 110 ; puis -50 % de 110 = -55 ; total = -45
-    assert net_un_tour([g2, g1], 100) == -45
+    # production du tour : +10 ; puis -50 % de 10 = -5 ; total = +5
+    assert net_un_tour([g2, g1], 100) == 5
 
 
 def test_simuler_trois_tours_regle_temporaire():
@@ -73,8 +73,9 @@ def test_simuler_trois_tours_regle_temporaire_deux_tours_pourcentage():
         tours_restants=2,
         mode_production="pourcentage",
     )
+    # % de la production du tour : sans autre règle fixe, ça reste 0
     out = simuler_trois_tours([g], 100)
-    assert out == [10, 11, 0]
+    assert out == [0, 0, 0]
 
 
 def test_simuler_trois_tours_pourcentage_sur_stock_cumule():
@@ -86,12 +87,14 @@ def test_simuler_trois_tours_pourcentage_sur_stock_cumule():
         mode_production="pourcentage",
     )
     out = simuler_trois_tours([g], 100)
-    # tour1: +10% de 100 = +10, stock 110
-    # tour2: +10% de 110 = +11, stock 121
-    # tour3: +10% de 121 = +12
-    assert out[0] == 10
-    assert out[1] == 11
-    assert out[2] == 12
+    assert out == [0, 0, 0]
+
+
+def test_pourcentage_applique_sur_production_du_tour():
+    g1 = SimpleNamespace(id=1, actif=True, quantite_par_tour=10, mode_production="fixe", tours_restants=None)
+    g2 = SimpleNamespace(id=2, actif=True, quantite_par_tour=20, mode_production="pourcentage", tours_restants=None)
+    # production : +10 ; puis +20% de 10 => +2 ; total = +12
+    assert net_un_tour([g1, g2], 0) == 12
 
 
 def test_simuler_trois_tours_regle_delai_deux_tours_fixe_definitif():
@@ -130,7 +133,8 @@ def test_simuler_trois_tours_regle_delai_deux_tours_pourcentage():
         mode_production="pourcentage",
     )
     out = simuler_trois_tours([g], 100)
-    assert out == [0, 0, 10]
+    # % de la production du tour : sans autre règle fixe, ça reste 0 même après activation
+    assert out == [0, 0, 0]
 
 
 def test_net_un_tour_ignore_regle_en_delai():

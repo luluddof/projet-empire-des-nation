@@ -1,6 +1,8 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, proxyRefs } from "vue";
 import { useRoute } from "vue-router";
+import MjViewSelect from "../components/MjViewSelect.vue";
+import { useMjView } from "../composables/useMjView.js";
 import {
   FLORINS_NOM,
   formatCompactNombre,
@@ -17,9 +19,17 @@ const props = defineProps({
 const { get } = useApi();
 const route = useRoute();
 const isMj = computed(() => props.authState.user?.is_mj);
+const currentUserIdStr = computed(() => String(props.authState.user?.id ?? ""));
 
 const utilisateurs = ref([]);
-const selectedUid = ref(props.authState.user?.id ?? "");
+const mj = proxyRefs(useMjView({
+  authState: props.authState,
+  utilisateursListeRef: utilisateurs,
+  isMjRef: isMj,
+  currentUserIdStrRef: currentUserIdStr,
+  allowGlobal: false,
+  storageKey: "mj_view_choice_uid",
+}));
 const data = ref({ transactions: [], total: 0, pages: 1, page: 1 });
 const erreur = ref("");
 const page = ref(1);
@@ -36,8 +46,8 @@ async function chargerUtilisateurs() {
 async function chargerTransactions() {
   erreur.value = "";
   const uid =
-    isMj.value && selectedUid.value
-      ? `&uid=${encodeURIComponent(String(selectedUid.value))}`
+    isMj.value && mj.mjVueChoix.value
+      ? `&uid=${encodeURIComponent(String(mj.mjVueChoix.value))}`
       : "";
   try {
     data.value = await get(`/api/transactions?page=${page.value}&per_page=50${uid}`);
@@ -53,11 +63,11 @@ function syncMjUidFromRoute() {
   const ids = new Set(list.map((u) => String(u.id)));
   const raw = route.query.uid;
   if (raw != null && raw !== "" && ids.has(String(raw))) {
-    selectedUid.value = String(raw);
+    mj.mjVueSetChoix(String(raw));
   }
 }
 
-watch([selectedUid, page], chargerTransactions);
+watch([mj.mjVueChoix, page], chargerTransactions);
 watch([() => utilisateurs.value, () => route.query.uid], syncMjUidFromRoute, { immediate: true });
 chargerUtilisateurs();
 chargerTransactions();
@@ -161,11 +171,20 @@ function titleQuantiteMouvement(t) {
         <h2 class="page-title">Gains & Pertes</h2>
         <p class="page-subtitle">Historique des mouvements de stock</p>
       </div>
-      <select v-if="isMj" v-model="selectedUid" class="select">
-        <option v-for="u in utilisateurs" :key="u.id" :value="u.id">
-          {{ u.username }}{{ u.is_mj ? " (MJ)" : "" }}
-        </option>
-      </select>
+      <div class="header-actions" v-if="isMj">
+        <MjViewSelect
+          :open="mj.mjVueOpen"
+          :label="mj.mjVueLabel"
+          :search="mj.mjVueSearch"
+          :options="mj.mjVueAutres"
+          :current-choice="mj.mjVueChoix"
+          :current-user-id-str="currentUserIdStr"
+          :show-global="false"
+          @update:open="(v) => (mj.mjVueOpen = v)"
+          @update:search="(v) => (mj.mjVueSearch = v)"
+          @select="mj.mjVueSetChoix"
+        />
+      </div>
     </div>
 
     <p v-if="erreur" class="error">{{ erreur }}</p>

@@ -1,7 +1,9 @@
 <script setup>
-import { computed, nextTick, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch, proxyRefs } from "vue";
 import { useRoute } from "vue-router";
 import PrixSparkline from "../components/PrixSparkline.vue";
+import MjViewSelect from "../components/MjViewSelect.vue";
+import { useMjView } from "../composables/useMjView.js";
 import {
   FLORINS_NOM,
   formatFlorin,
@@ -19,9 +21,17 @@ const { get, put, post } = useApi();
 const route = useRoute();
 
 const isMj = computed(() => props.authState.user?.is_mj);
+const currentUserIdStr = computed(() => String(props.authState.user?.id ?? ""));
 
 const utilisateurs = ref([]);
-const selectedUid = ref(props.authState.user?.id ?? "");
+const mj = proxyRefs(useMjView({
+  authState: props.authState,
+  utilisateursListeRef: utilisateurs,
+  isMjRef: isMj,
+  currentUserIdStrRef: currentUserIdStr,
+  allowGlobal: false,
+  storageKey: "mj_view_choice_uid",
+}));
 const stocks = ref([]);
 const gainsPassifs = ref([]);
 const erreur = ref("");
@@ -40,8 +50,8 @@ async function chargerUtilisateurs() {
 async function chargerStocks() {
   erreur.value = "";
   const uid =
-    isMj.value && selectedUid.value
-      ? `?uid=${encodeURIComponent(String(selectedUid.value))}`
+    isMj.value && mj.mjVueChoix.value
+      ? `?uid=${encodeURIComponent(String(mj.mjVueChoix.value))}`
       : "";
   try {
     const [s, g] = await Promise.all([
@@ -63,11 +73,11 @@ function syncMjUidFromRoute() {
   const ids = new Set(list.map((u) => String(u.id)));
   const raw = route.query.uid;
   if (raw != null && raw !== "" && ids.has(String(raw))) {
-    selectedUid.value = String(raw);
+    mj.mjVueSetChoix(String(raw));
   }
 }
 
-watch(selectedUid, chargerStocks);
+watch(mj.mjVueChoix, chargerStocks);
 watch([() => utilisateurs.value, () => route.query.uid], syncMjUidFromRoute, { immediate: true });
 chargerUtilisateurs();
 chargerStocks();
@@ -104,8 +114,8 @@ async function sauvegarderTout() {
   erreur.value = "";
   sauvegarde.value = true;
   const uidParam =
-    isMj.value && selectedUid.value
-      ? `?uid=${encodeURIComponent(String(selectedUid.value))}`
+    isMj.value && mj.mjVueChoix.value
+      ? `?uid=${encodeURIComponent(String(mj.mjVueChoix.value))}`
       : "";
   const promesses = Object.entries(modifEnCours.value)
     .filter(([, v]) => v !== "")
@@ -327,11 +337,19 @@ function sortLabel(k) {
         </p>
       </div>
       <div class="header-actions">
-        <select v-if="isMj" v-model="selectedUid" class="select">
-          <option v-for="u in utilisateurs" :key="u.id" :value="u.id">
-            {{ u.username }}{{ u.is_mj ? " (MJ)" : "" }}
-          </option>
-        </select>
+        <MjViewSelect
+          v-if="isMj"
+          :open="mj.mjVueOpen"
+          :label="mj.mjVueLabel"
+          :search="mj.mjVueSearch"
+          :options="mj.mjVueAutres"
+          :current-choice="mj.mjVueChoix"
+          :current-user-id-str="currentUserIdStr"
+          :show-global="false"
+          @update:open="(v) => (mj.mjVueOpen = v)"
+          @update:search="(v) => (mj.mjVueSearch = v)"
+          @select="mj.mjVueSetChoix"
+        />
         <button
           class="button"
           :disabled="nbModifications === 0 || sauvegarde"
@@ -383,9 +401,12 @@ function sortLabel(k) {
                 @input="setModif(s.ressource_id, $event.target.value)"
               />
             </td>
-            <td v-if="estFlorins(s)" class="gain-cell muted">—</td>
-            <td v-else class="gain-cell">
-              <span class="prod-next-tour" :title="'Somme des règles actives pour le prochain tour (mercredi ou samedi 00h00)'">
+            <td class="gain-cell">
+              <span
+                v-if="!estFlorins(s)"
+                class="prod-next-tour"
+                :title="'Somme des règles actives pour le prochain tour (mercredi ou samedi 00h00)'"
+              >
                 {{ texteProchainTour(s) }}
               </span>
               <router-link
@@ -394,7 +415,7 @@ function sortLabel(k) {
                   path: '/productions',
                   query: {
                     ressource: String(s.ressource_id),
-                    ...(isMj && selectedUid ? { uid: String(selectedUid) } : {}),
+                    ...(isMj && mj.mjVueChoix ? { uid: String(mj.mjVueChoix) } : {}),
                   },
                 }"
               >

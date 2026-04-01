@@ -1,7 +1,9 @@
 <script setup>
-import { computed, nextTick, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch, proxyRefs } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ProductionChronologieChart from "../components/ProductionChronologieChart.vue";
+import MjViewSelect from "../components/MjViewSelect.vue";
+import { useMjView } from "../composables/useMjView.js";
 import { FLORINS_NOM, useApi } from "../composables/useApi.js";
 import { formatEffetProduction } from "../utils/gainPassif.js";
 
@@ -14,9 +16,17 @@ const route = useRoute();
 const router = useRouter();
 
 const isMj = computed(() => props.authState.user?.is_mj);
+const currentUserIdStr = computed(() => String(props.authState.user?.id ?? ""));
 
 const utilisateurs = ref([]);
-const selectedUid = ref(props.authState.user?.id ?? "");
+const mj = proxyRefs(useMjView({
+  authState: props.authState,
+  utilisateursListeRef: utilisateurs,
+  isMjRef: isMj,
+  currentUserIdStrRef: currentUserIdStr,
+  allowGlobal: false,
+  storageKey: "mj_view_choice_uid",
+}));
 const gainsPassifs = ref([]);
 const ressourcesListe = ref([]);
 const balisesDisponibles = ref([]);
@@ -51,8 +61,8 @@ async function chargerUtilisateurs() {
 async function charger() {
   erreur.value = "";
   const uid =
-    isMj.value && selectedUid.value
-      ? `?uid=${encodeURIComponent(String(selectedUid.value))}`
+    isMj.value && mj.mjVueChoix.value
+      ? `?uid=${encodeURIComponent(String(mj.mjVueChoix.value))}`
       : "";
   const qRes = isMj.value ? "?global=1" : "";
   try {
@@ -62,7 +72,7 @@ async function charger() {
       get("/api/gains-passifs/balises"),
     ]);
     gainsPassifs.value = g;
-    ressourcesListe.value = (r || []).filter((x) => x.nom !== FLORINS_NOM);
+    ressourcesListe.value = r || [];
     balisesDisponibles.value = balises || [];
   } catch (e) {
     erreur.value = e.message;
@@ -82,8 +92,8 @@ async function chargerChronologie() {
     return;
   }
   const uidParam =
-    isMj.value && selectedUid.value
-      ? `&uid=${encodeURIComponent(String(selectedUid.value))}`
+    isMj.value && mj.mjVueChoix.value
+      ? `&uid=${encodeURIComponent(String(mj.mjVueChoix.value))}`
       : "";
   try {
     chronologie.value = await get(`/api/gains-passifs/chronologie?ressource_id=${rid}${uidParam}`);
@@ -93,7 +103,7 @@ async function chargerChronologie() {
   }
 }
 
-watch(selectedUid, charger);
+watch(mj.mjVueChoix, charger);
 watch(
   () => route.query.ressource,
   () => charger()
@@ -105,16 +115,16 @@ watch(utilisateurs, (list) => {
   const fromRoute =
     route.query.uid != null && route.query.uid !== "" ? String(route.query.uid) : null;
   if (fromRoute && ids.has(fromRoute)) {
-    selectedUid.value = fromRoute;
+    mj.mjVueSetChoix(fromRoute);
     return;
   }
-  const cur = String(selectedUid.value ?? "");
+  const cur = String(mj.mjVueChoix.value ?? "");
   if (!cur || !ids.has(cur)) {
     const me = props.authState.user?.id;
     if (me != null && ids.has(String(me))) {
-      selectedUid.value = String(me);
+      mj.mjVueSetChoix(String(me));
     } else {
-      selectedUid.value = String(list[0].id);
+      mj.mjVueSetChoix(String(list[0].id));
     }
   }
 });
@@ -128,7 +138,7 @@ watch(
     const fromRoute =
       route.query.uid != null && route.query.uid !== "" ? String(route.query.uid) : null;
     if (fromRoute && ids.has(fromRoute)) {
-      selectedUid.value = fromRoute;
+      mj.mjVueSetChoix(fromRoute);
     }
   }
 );
@@ -197,8 +207,8 @@ const productionsParRessource = computed(() => {
 function ouvrirDetailRessource(rid) {
   if (!rid) return;
   const q = { ressource: String(rid) };
-  if (isMj.value && selectedUid.value) {
-    q.uid = String(selectedUid.value);
+  if (isMj.value && mj.mjVueChoix.value) {
+    q.uid = String(mj.mjVueChoix.value);
   }
   router.push({ path: "/productions", query: q });
 }
@@ -299,7 +309,7 @@ function ouvrirEditionGain(g) {
 
 async function sauvegarderGainForm(etAjouterAutre = false) {
   const uidParam =
-    isMj.value && selectedUid.value ? `?uid=${encodeURIComponent(String(selectedUid.value))}` : "";
+    isMj.value && mj.mjVueChoix.value ? `?uid=${encodeURIComponent(String(mj.mjVueChoix.value))}` : "";
   const m = gainFormModal.value;
   if (!m) return;
   if (m.mode === "create" && !gainForm.ressource_id) {
@@ -365,7 +375,7 @@ async function sauvegarderGainForm(etAjouterAutre = false) {
 async function supprimerGain(g) {
   if (!confirm(`Supprimer cette production pour « ${g.ressource?.nom ?? "?" } » ?`)) return;
   const uidParam =
-    isMj.value && selectedUid.value ? `?uid=${encodeURIComponent(String(selectedUid.value))}` : "";
+    isMj.value && mj.mjVueChoix.value ? `?uid=${encodeURIComponent(String(mj.mjVueChoix.value))}` : "";
   try {
     await del(`/api/gains-passifs/${g.id}${uidParam}`);
     await charger();
@@ -401,11 +411,19 @@ const colonnes = [
         </p>
       </div>
       <div class="header-actions">
-        <select v-if="isMj" v-model="selectedUid" class="select">
-          <option v-for="u in utilisateurs" :key="u.id" :value="u.id">
-            {{ u.username }}{{ u.is_mj ? " (MJ)" : "" }}
-          </option>
-        </select>
+        <MjViewSelect
+          v-if="isMj"
+          :open="mj.mjVueOpen"
+          :label="mj.mjVueLabel"
+          :search="mj.mjVueSearch"
+          :options="mj.mjVueAutres"
+          :current-choice="mj.mjVueChoix"
+          :current-user-id-str="currentUserIdStr"
+          :show-global="false"
+          @update:open="(v) => (mj.mjVueOpen = v)"
+          @update:search="(v) => (mj.mjVueSearch = v)"
+          @select="mj.mjVueSetChoix"
+        />
         <button type="button" class="button" @click="ouvrirCreationSelonContexte">
           + Nouvelle production
         </button>
@@ -413,6 +431,23 @@ const colonnes = [
     </div>
 
     <p v-if="erreur" class="error">{{ erreur }}</p>
+
+    <div v-if="productionsParRessource.length > 0" class="productions-header">
+      <div class="productions-header-title">Aperçu</div>
+      <div class="productions-header-list">
+        <button
+          v-for="p in productionsParRessource"
+          :key="p.ressource_id"
+          type="button"
+          class="productions-header-item"
+          :class="{ active: Number(ressourceIdFiltre) === Number(p.ressource_id) }"
+          @click="ouvrirDetailRessource(p.ressource_id)"
+        >
+          <span class="productions-header-nom">{{ p.ressource?.nom ?? "—" }}</span>
+          <span class="productions-header-count">{{ p.gains.length }}</span>
+        </button>
+      </div>
+    </div>
 
     <div v-if="ressourceIdFiltre" class="banner-salon">
       <strong>Une ressource à la fois.</strong>
@@ -813,5 +848,67 @@ details.details-summary {
 
 details[open] .details-summary::after {
   content: "▲";
+}
+
+.productions-header {
+  margin: 10px 0 14px;
+  padding: 12px 14px;
+  background: rgba(15, 23, 42, 0.25);
+  border: 1px solid #334155;
+  border-radius: 12px;
+}
+
+.productions-header-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+}
+
+.productions-header-list {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.productions-header-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  background: rgba(30, 41, 59, 0.4);
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.productions-header-item:hover {
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(30, 41, 59, 0.7);
+}
+
+.productions-header-item.active {
+  border-color: rgba(147, 197, 253, 0.35);
+  background: rgba(147, 197, 253, 0.08);
+}
+
+.productions-header-nom {
+  font-weight: 700;
+}
+
+.productions-header-count {
+  min-width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 </style>

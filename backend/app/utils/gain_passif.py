@@ -1,4 +1,4 @@
-"""Calcul des effets des gains passifs (quantité fixe ou % du stock courant)."""
+"""Calcul des effets des gains passifs (quantité fixe ou % de la production du tour)."""
 
 BALISES_VALIDES = frozenset({"science", "politique", "evenement", "batiment", "autre"})
 MODES_VALIDES = frozenset({"fixe", "pourcentage"})
@@ -27,11 +27,11 @@ def normaliser_mode(v):
     return s if s in MODES_VALIDES else "fixe"
 
 
-def delta_ligne(stock_avant: int, gain) -> int:
-    """Effet d’une règle sur le stock, selon le stock *avant* cette ligne (ordre par id)."""
+def delta_ligne(production_avant: int, gain) -> int:
+    """Effet d’une règle sur la production du tour, selon la production *avant* cette ligne (ordre par id)."""
     mode = normaliser_mode(getattr(gain, "mode_production", None))
     if mode == "pourcentage":
-        return int(stock_avant * int(gain.quantite_par_tour) / 100)
+        return int(production_avant * int(gain.quantite_par_tour) / 100)
     return int(gain.quantite_par_tour)
 
 
@@ -51,6 +51,7 @@ def net_un_tour_breakdown(gains, stock_initial: int) -> dict:
     """
 
     cur = stock_initial
+    prod = 0
     total_actif = 0
     total_pending = 0
 
@@ -71,8 +72,9 @@ def net_un_tour_breakdown(gains, stock_initial: int) -> dict:
             candidats.append((int(g.id), bool(dl > 0), g))
 
     for _, pending_init, g in sorted(candidats, key=lambda x: x[0]):
-        d = delta_ligne(cur, g)
+        d = delta_ligne(prod, g)
         cur += d
+        prod += d
         if pending_init:
             total_pending += d
         else:
@@ -121,13 +123,15 @@ def simuler_trois_tours_breakdown(gains, stock_initial: int):
         active.sort(key=lambda x: x["id"])
         tour_actif = 0
         tour_pending = 0
+        prod = 0
 
         for x in active:
             if x["mode"] == "pourcentage":
-                d = int(cur_stock * x["q"] / 100)
+                d = int(prod * x["q"] / 100)
             else:
                 d = x["q"]
             cur_stock += d
+            prod += d
             if x.get("pending_init"):
                 tour_pending += d
             else:
