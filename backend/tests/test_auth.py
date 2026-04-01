@@ -48,8 +48,8 @@ def test_callback_success_sets_session_and_redirects(client, monkeypatch):
     def fake_profile(_token):
         return {"id": "42", "username": "empire", "avatar": "abc"}
 
-    monkeypatch.setattr("app.auth.exchange_code_for_token", fake_exchange)
-    monkeypatch.setattr("app.auth.fetch_discord_user_profile", fake_profile)
+    monkeypatch.setattr("app.api.auth._exchange_code_for_token", fake_exchange)
+    monkeypatch.setattr("app.api.auth._fetch_discord_profile", fake_profile)
 
     response = client.get("/api/auth/discord/callback?code=discord-code")
 

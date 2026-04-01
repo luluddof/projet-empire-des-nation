@@ -1,0 +1,201 @@
+from flask import Blueprint, jsonify, request
+
+from ..extensions import db
+from ..models import Categorie, CategorieModificateurJoueur, Utilisateur
+from ..utils.prix import recalcule_prix_ressource
+from ..utils.prix_snapshot import enregistrer_snapshot_prix
+from ..utils.decorators import login_required, mj_required
+
+categories_bp = Blueprint("categories", __name__)
+
+
+def _propager_prix_vers_ressources_liees(cat: Categorie):
+    for r in list(cat.ressources):
+        recalcule_prix_ressource(r)
+        enregistrer_snapshot_prix(r)
+
+
+@categories_bp.get("/api/categories")
+@login_required
+def list_categories():
+    rows = Categorie.query.order_by(Categorie.nom).all()
+    return jsonify([c.to_dict() for c in rows])
+
+
+@categories_bp.post("/api/categories")
+@mj_required
+def create_categorie():
+    data = request.get_json() or {}
+    if "nom" not in data or not str(data["nom"]).strip():
+        return jsonify({"error": "Champ 'nom' requis"}), 400
+    nom = str(data["nom"]).strip()
+    if Categorie.query.filter_by(nom=nom).first():
+        return jsonify({"error": "Cette catégorie existe déjà"}), 400
+    pct = float(data.get("modificateur_pct", 100.0))
+    c = Categorie(nom=nom, modificateur_pct=pct)
+    db.session.add(c)
+    db.session.commit()
+    return jsonify(c.to_dict()), 201
+
+
+@categories_bp.put("/api/categories/<int:categorie_id>")
+@mj_required
+def update_categorie(categorie_id):
+    c = db.get_or_404(Categorie, categorie_id)
+    data = request.get_json() or {}
+    modificateur_change = "modificateur_pct" in data
+    if "nom" in data and str(data["nom"]).strip():
+        nouveau = str(data["nom"]).strip()
+        existant = Categorie.query.filter(Categorie.nom == nouveau, Categorie.id != c.id).first()
+        if existant:
+            return jsonify({"error": "Ce nom est déjà utilisé"}), 400
+        c.nom = nouveau
+    if "modificateur_pct" in data:
+        c.modificateur_pct = float(data["modificateur_pct"])
+    db.session.commit()
+    # Si le % change, il faut propager sur toutes les ressources liées.
+    if modificateur_change or data.get("propager"):
+        _propager_prix_vers_ressources_liees(c)
+        db.session.commit()
+    return jsonify(c.to_dict())
+
+
+def _resolve_utilisateur_ids(data) -> list[str]:
+    utilisateur_ids = data.get("utilisateur_ids")
+    if utilisateur_ids is None:
+        uid = data.get("utilisateur_id")
+        if uid is None:
+            return []
+        utilisateur_ids = [uid]
+    if not isinstance(utilisateur_ids, list):
+        return []
+    return [str(x) for x in utilisateur_ids if x is not None and str(x).strip() != ""]
+
+
+@categories_bp.put("/api/categories/<int:categorie_id>/modificateur-joueur")
+@mj_required
+def set_modificateur_joueur(categorie_id: int):
+    c = db.get_or_404(Categorie, categorie_id)
+    data = request.get_json() or {}
+
+    supprimer = bool(data.get("supprimer", False))
+    utilisateur_ids = _resolve_utilisateur_ids(data)
+    if not utilisateur_ids:
+        return jsonify({"error": "utilisateur_id ou utilisateur_ids requis"}), 400
+
+    # Valide que les utilisateurs existent.
+    for uid in utilisateur_ids:
+        if not db.session.get(Utilisateur, uid):
+            return jsonify({"error": f"Joueur inconnu : {uid}"}), 400
+
+    if supprimer:
+        for uid in utilisateur_ids:
+            row = CategorieModificateurJoueur.query.filter_by(
+                utilisateur_id=uid, categorie_id=c.id
+            ).first()
+            if row is not None:
+                db.session.delete(row)
+        db.session.commit()
+        return jsonify({"ok": True, "categorie_id": c.id, "supprimé": True})
+
+    if "modificateur_pct" not in data:
+        return jsonify({"error": "Champ 'modificateur_pct' requis (ou 'supprimer': true)"}), 400
+
+    operation = (data.get("operation") or "set").strip().lower()
+    if operation not in ("set", "add", "remove"):
+        return jsonify({"error": "operation invalide (set, add, remove)"}), 400
+
+    pct_in = float(data["modificateur_pct"])
+    if operation == "set":
+        if pct_in <= 0:
+            return jsonify({"error": "modificateur_pct doit être > 0"}), 400
+    else:
+        # add/remove : on attend une "valeur delta" positive (on applique -delta en remove)
+        if pct_in <= 0:
+            return jsonify({"error": "Pour add/remove, modificateur_pct (delta) doit être > 0"}), 400
+
+    for uid in utilisateur_ids:
+        base = float(c.modificateur_pct)
+        row = CategorieModificateurJoueur.query.filter_by(
+            utilisateur_id=uid, categorie_id=c.id
+        ).first()
+
+        if row is not None:
+            base = float(row.modificateur_pct)
+
+        if operation == "set":
+            nouveau = pct_in
+        elif operation == "add":
+            nouveau = base + pct_in
+        else:  # remove
+            nouveau = base - pct_in
+
+        if nouveau <= 0:
+            return jsonify({"error": "Résultat invalide : modificateur_pct doit rester > 0"}), 400
+
+        if row is not None:
+            row.modificateur_pct = nouveau
+        else:
+            db.session.add(
+                CategorieModificateurJoueur(
+                    utilisateur_id=uid,
+                    categorie_id=c.id,
+                    modificateur_pct=nouveau,
+                )
+            )
+
+    db.session.commit()
+    return jsonify(
+        {
+            "ok": True,
+            "categorie_id": c.id,
+            "modificateur_pct": pct_in,
+            "operation": operation,
+            "utilisateur_ids": utilisateur_ids,
+        }
+    )
+
+
+@categories_bp.get("/api/categories/<int:categorie_id>/modificateur-joueur")
+@mj_required
+def get_modificateur_joueur(categorie_id: int):
+    c = db.get_or_404(Categorie, categorie_id)
+
+    # Accepte soit :
+    # - utilisateur_id=101
+    # - utilisateur_ids=101&utilisateur_ids=102
+    utilisateur_ids = request.args.getlist("utilisateur_ids")
+    if not utilisateur_ids:
+        uid = request.args.get("utilisateur_id")
+        if uid:
+            utilisateur_ids = [uid]
+
+    utilisateur_ids = [str(x) for x in utilisateur_ids if x is not None and str(x).strip() != ""]
+    if not utilisateur_ids:
+        return jsonify({"error": "utilisateur_id ou utilisateur_ids requis"}), 400
+
+    for uid in utilisateur_ids:
+        if not db.session.get(Utilisateur, uid):
+            return jsonify({"error": f"Joueur inconnu : {uid}"}), 400
+
+    valeurs = {}
+    for uid in utilisateur_ids:
+        row = CategorieModificateurJoueur.query.filter_by(
+            utilisateur_id=uid, categorie_id=c.id
+        ).first()
+        valeurs[uid] = float(row.modificateur_pct) if row is not None else float(c.modificateur_pct)
+
+    return jsonify({"ok": True, "categorie_id": c.id, "valeurs": valeurs})
+
+
+@categories_bp.delete("/api/categories/<int:categorie_id>")
+@mj_required
+def delete_categorie(categorie_id):
+    c = db.get_or_404(Categorie, categorie_id)
+    for r in list(c.ressources):
+        r.categories_rel.remove(c)
+        recalcule_prix_ressource(r)
+        enregistrer_snapshot_prix(r)
+    db.session.delete(c)
+    db.session.commit()
+    return jsonify({"ok": True})

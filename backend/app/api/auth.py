@@ -3,10 +3,13 @@ from urllib.parse import urlencode
 import requests
 from flask import Blueprint, current_app, jsonify, redirect, request, session
 
+from ..extensions import db
+from ..models import Utilisateur
+
 auth_bp = Blueprint("auth", __name__)
 
 
-def build_discord_authorize_url():
+def _build_discord_authorize_url():
     params = {
         "client_id": current_app.config["DISCORD_CLIENT_ID"],
         "redirect_uri": current_app.config["DISCORD_REDIRECT_URI"],
@@ -23,7 +26,7 @@ class DiscordTokenError(Exception):
         super().__init__(f"Discord {status_code}: {body}")
 
 
-def exchange_code_for_token(code):
+def _exchange_code_for_token(code):
     data = {
         "client_id": current_app.config["DISCORD_CLIENT_ID"],
         "client_secret": current_app.config["DISCORD_CLIENT_SECRET"],
@@ -44,7 +47,7 @@ def exchange_code_for_token(code):
     return payload["access_token"]
 
 
-def fetch_discord_user_profile(access_token):
+def _fetch_discord_profile(access_token):
     response = requests.get(
         "https://discord.com/api/users/@me",
         headers={"Authorization": f"Bearer {access_token}"},
@@ -59,9 +62,46 @@ def fetch_discord_user_profile(access_token):
     }
 
 
+def _upsert_utilisateur(profile):
+    """Crée ou met à jour l'utilisateur en base, renvoie l'objet Utilisateur."""
+    mj_raw = current_app.config.get("MJ_DISCORD_IDS", "") or ""
+    mj_ids = {x.strip() for x in mj_raw.split(",") if x.strip()}
+    user = db.session.get(Utilisateur, profile["id"])
+    if user is None:
+        user = Utilisateur(
+            id=profile["id"],
+            username=profile["username"],
+            avatar=profile.get("avatar"),
+            is_mj=profile["id"] in mj_ids,
+        )
+        db.session.add(user)
+    else:
+        user.username = profile["username"]
+        user.avatar = profile.get("avatar")
+        if profile["id"] in mj_ids:
+            user.is_mj = True
+    db.session.commit()
+    return user
+
+
+@auth_bp.get("/api/auth/discord/redirect-uri")
+def discord_redirect_uri_info():
+    """
+    Retourne l'URI exacte envoyée à Discord pour OAuth2.
+    Copie cette valeur dans Discord Developer Portal > OAuth2 > Redirects (Save).
+    """
+    uri = current_app.config["DISCORD_REDIRECT_URI"]
+    return jsonify(
+        {
+            "redirect_uri": uri,
+            "hint": "Colle cette chaine telle quelle dans OAuth2 > Redirects, puis enregistre.",
+        }
+    )
+
+
 @auth_bp.get("/api/auth/discord/login")
 def discord_login():
-    return redirect(build_discord_authorize_url())
+    return redirect(_build_discord_authorize_url())
 
 
 @auth_bp.get("/api/auth/discord/callback")
@@ -72,8 +112,8 @@ def discord_callback():
         return redirect(f"{frontend_url}/?error=missing_code")
 
     try:
-        access_token = exchange_code_for_token(code)
-        discord_user = fetch_discord_user_profile(access_token)
+        access_token = _exchange_code_for_token(code)
+        profile = _fetch_discord_profile(access_token)
     except DiscordTokenError as exc:
         return (
             f"<h2>Erreur Discord OAuth</h2>"
@@ -82,10 +122,14 @@ def discord_callback():
             f"<p><a href='{frontend_url}'>Retour</a></p>"
         ), 500
     except requests.RequestException as exc:
-        return f"<h2>Erreur Discord OAuth</h2><pre>{exc}</pre><p><a href='{frontend_url}'>Retour</a></p>", 500
+        return (
+            f"<h2>Erreur Discord OAuth</h2><pre>{exc}</pre>"
+            f"<p><a href='{frontend_url}'>Retour</a></p>"
+        ), 500
 
-    session["discord_user"] = discord_user
-    return redirect(f"{frontend_url}/dashboard")
+    user = _upsert_utilisateur(profile)
+    session["discord_user"] = {**profile, "is_mj": user.is_mj}
+    return redirect(f"{frontend_url}/")
 
 
 @auth_bp.get("/api/auth/me")
