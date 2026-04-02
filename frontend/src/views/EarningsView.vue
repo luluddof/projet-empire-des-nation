@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, proxyRefs } from "vue";
 import { useRoute } from "vue-router";
 import MjViewSelect from "../components/MjViewSelect.vue";
 import { useMjView } from "../composables/useMjView.js";
@@ -22,7 +22,7 @@ const isMj = computed(() => props.authState.user?.is_mj);
 const currentUserIdStr = computed(() => String(props.authState.user?.id ?? ""));
 
 const utilisateurs = ref([]);
-const mj = useMjView({
+const mjRaw = useMjView({
   authState: props.authState,
   utilisateursListeRef: utilisateurs,
   isMjRef: isMj,
@@ -30,6 +30,7 @@ const mj = useMjView({
   allowGlobal: false,
   storageKey: "mj_view_choice_uid",
 });
+const mj = proxyRefs(mjRaw);
 const data = ref({ transactions: [], total: 0, pages: 1, page: 1 });
 const erreur = ref("");
 const page = ref(1);
@@ -46,8 +47,8 @@ async function chargerUtilisateurs() {
 async function chargerTransactions() {
   erreur.value = "";
   const uid =
-    isMj.value && mj.mjVueChoix.value
-      ? `&uid=${encodeURIComponent(String(mj.mjVueChoix.value))}`
+    isMj.value && mjRaw.mjVueChoix.value
+      ? `&uid=${encodeURIComponent(String(mjRaw.mjVueChoix.value))}`
       : "";
   try {
     data.value = await get(`/api/transactions?page=${page.value}&per_page=50${uid}`);
@@ -63,11 +64,11 @@ function syncMjUidFromRoute() {
   const ids = new Set(list.map((u) => String(u.id)));
   const raw = route.query.uid;
   if (raw != null && raw !== "" && ids.has(String(raw))) {
-    mj.mjVueSetChoix(String(raw));
+    mjRaw.mjVueSetChoix(String(raw));
   }
 }
 
-watch([mj.mjVueChoix, page], chargerTransactions);
+watch([() => mjRaw.mjVueChoix.value, page], chargerTransactions);
 watch([() => utilisateurs.value, () => route.query.uid], syncMjUidFromRoute, { immediate: true });
 chargerUtilisateurs();
 chargerTransactions();

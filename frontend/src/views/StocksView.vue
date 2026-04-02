@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch, proxyRefs } from "vue";
 import { useRoute } from "vue-router";
 import PrixSparkline from "../components/PrixSparkline.vue";
 import MjViewSelect from "../components/MjViewSelect.vue";
@@ -24,7 +24,7 @@ const isMj = computed(() => props.authState.user?.is_mj);
 const currentUserIdStr = computed(() => String(props.authState.user?.id ?? ""));
 
 const utilisateurs = ref([]);
-const mj = useMjView({
+const mjRaw = useMjView({
   authState: props.authState,
   utilisateursListeRef: utilisateurs,
   isMjRef: isMj,
@@ -32,6 +32,9 @@ const mj = useMjView({
   allowGlobal: false,
   storageKey: "mj_view_choice_uid",
 });
+// Pour le template : évite de passer des Ref en props (Vue ne dé-référence pas
+// automatiquement les refs imbriquées dans un objet normal).
+const mj = proxyRefs(mjRaw);
 const stocks = ref([]);
 const gainsPassifs = ref([]);
 const erreur = ref("");
@@ -50,8 +53,8 @@ async function chargerUtilisateurs() {
 async function chargerStocks() {
   erreur.value = "";
   const uid =
-    isMj.value && mj.mjVueChoix.value
-      ? `?uid=${encodeURIComponent(String(mj.mjVueChoix.value))}`
+    isMj.value && mjRaw.mjVueChoix.value
+      ? `?uid=${encodeURIComponent(String(mjRaw.mjVueChoix.value))}`
       : "";
   try {
     const [s, g] = await Promise.all([
@@ -73,11 +76,11 @@ function syncMjUidFromRoute() {
   const ids = new Set(list.map((u) => String(u.id)));
   const raw = route.query.uid;
   if (raw != null && raw !== "" && ids.has(String(raw))) {
-    mj.mjVueSetChoix(String(raw));
+    mjRaw.mjVueSetChoix(String(raw));
   }
 }
 
-watch(mj.mjVueChoix, chargerStocks);
+watch(() => mjRaw.mjVueChoix.value, chargerStocks);
 watch([() => utilisateurs.value, () => route.query.uid], syncMjUidFromRoute, { immediate: true });
 chargerUtilisateurs();
 chargerStocks();
@@ -114,8 +117,8 @@ async function sauvegarderTout() {
   erreur.value = "";
   sauvegarde.value = true;
   const uidParam =
-    isMj.value && mj.mjVueChoix.value
-      ? `?uid=${encodeURIComponent(String(mj.mjVueChoix.value))}`
+    isMj.value && mjRaw.mjVueChoix.value
+      ? `?uid=${encodeURIComponent(String(mjRaw.mjVueChoix.value))}`
       : "";
   const promesses = Object.entries(modifEnCours.value)
     .filter(([, v]) => v !== "")

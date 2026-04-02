@@ -24,6 +24,12 @@ services:
     environment:
       # Proxy /api → backend (même origine navigateur :5173 = cookie de session OK)
       VITE_PROXY_TARGET: http://backend:5000
+    volumes:
+      # Monte le code source local dans le conteneur pour que Vite HMR détecte
+      # les changements sans rebuild de l'image à chaque modif.
+      - ./frontend/src:/app/src
+      - ./frontend/vite.config.js:/app/vite.config.js
+      - ./frontend/index.html:/app/index.html
     depends_on:
       - backend
     restart: unless-stopped

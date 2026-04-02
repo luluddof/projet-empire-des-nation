@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch, proxyRefs } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ProductionChronologieChart from "../components/ProductionChronologieChart.vue";
 import MjViewSelect from "../components/MjViewSelect.vue";
@@ -19,7 +19,7 @@ const isMj = computed(() => props.authState.user?.is_mj);
 const currentUserIdStr = computed(() => String(props.authState.user?.id ?? ""));
 
 const utilisateurs = ref([]);
-const mj = useMjView({
+const mjRaw = useMjView({
   authState: props.authState,
   utilisateursListeRef: utilisateurs,
   isMjRef: isMj,
@@ -27,6 +27,7 @@ const mj = useMjView({
   allowGlobal: false,
   storageKey: "mj_view_choice_uid",
 });
+const mj = proxyRefs(mjRaw);
 const gainsPassifs = ref([]);
 const ressourcesListe = ref([]);
 const balisesDisponibles = ref([]);
@@ -61,8 +62,8 @@ async function chargerUtilisateurs() {
 async function charger() {
   erreur.value = "";
   const uid =
-    isMj.value && mj.mjVueChoix.value
-      ? `?uid=${encodeURIComponent(String(mj.mjVueChoix.value))}`
+    isMj.value && mjRaw.mjVueChoix.value
+      ? `?uid=${encodeURIComponent(String(mjRaw.mjVueChoix.value))}`
       : "";
   const qRes = isMj.value ? "?global=1" : "";
   try {
@@ -92,8 +93,8 @@ async function chargerChronologie() {
     return;
   }
   const uidParam =
-    isMj.value && mj.mjVueChoix.value
-      ? `&uid=${encodeURIComponent(String(mj.mjVueChoix.value))}`
+    isMj.value && mjRaw.mjVueChoix.value
+      ? `&uid=${encodeURIComponent(String(mjRaw.mjVueChoix.value))}`
       : "";
   try {
     chronologie.value = await get(`/api/gains-passifs/chronologie?ressource_id=${rid}${uidParam}`);
@@ -103,7 +104,7 @@ async function chargerChronologie() {
   }
 }
 
-watch(mj.mjVueChoix, charger);
+watch(() => mjRaw.mjVueChoix.value, charger);
 watch(
   () => route.query.ressource,
   () => charger()
@@ -115,16 +116,16 @@ watch(utilisateurs, (list) => {
   const fromRoute =
     route.query.uid != null && route.query.uid !== "" ? String(route.query.uid) : null;
   if (fromRoute && ids.has(fromRoute)) {
-    mj.mjVueSetChoix(fromRoute);
+    mjRaw.mjVueSetChoix(fromRoute);
     return;
   }
-  const cur = String(mj.mjVueChoix.value ?? "");
+  const cur = String(mjRaw.mjVueChoix.value ?? "");
   if (!cur || !ids.has(cur)) {
     const me = props.authState.user?.id;
     if (me != null && ids.has(String(me))) {
-      mj.mjVueSetChoix(String(me));
+      mjRaw.mjVueSetChoix(String(me));
     } else {
-      mj.mjVueSetChoix(String(list[0].id));
+      mjRaw.mjVueSetChoix(String(list[0].id));
     }
   }
 });
@@ -138,7 +139,7 @@ watch(
     const fromRoute =
       route.query.uid != null && route.query.uid !== "" ? String(route.query.uid) : null;
     if (fromRoute && ids.has(fromRoute)) {
-      mj.mjVueSetChoix(fromRoute);
+      mjRaw.mjVueSetChoix(fromRoute);
     }
   }
 );
@@ -207,8 +208,8 @@ const productionsParRessource = computed(() => {
 function ouvrirDetailRessource(rid) {
   if (!rid) return;
   const q = { ressource: String(rid) };
-  if (isMj.value && mj.mjVueChoix.value) {
-    q.uid = String(mj.mjVueChoix.value);
+  if (isMj.value && mjRaw.mjVueChoix.value) {
+    q.uid = String(mjRaw.mjVueChoix.value);
   }
   router.push({ path: "/productions", query: q });
 }
@@ -309,7 +310,7 @@ function ouvrirEditionGain(g) {
 
 async function sauvegarderGainForm(etAjouterAutre = false) {
   const uidParam =
-    isMj.value && mj.mjVueChoix.value ? `?uid=${encodeURIComponent(String(mj.mjVueChoix.value))}` : "";
+    isMj.value && mjRaw.mjVueChoix.value ? `?uid=${encodeURIComponent(String(mjRaw.mjVueChoix.value))}` : "";
   const m = gainFormModal.value;
   if (!m) return;
   if (m.mode === "create" && !gainForm.ressource_id) {
@@ -375,7 +376,7 @@ async function sauvegarderGainForm(etAjouterAutre = false) {
 async function supprimerGain(g) {
   if (!confirm(`Supprimer cette production pour « ${g.ressource?.nom ?? "?" } » ?`)) return;
   const uidParam =
-    isMj.value && mj.mjVueChoix.value ? `?uid=${encodeURIComponent(String(mj.mjVueChoix.value))}` : "";
+    isMj.value && mjRaw.mjVueChoix.value ? `?uid=${encodeURIComponent(String(mjRaw.mjVueChoix.value))}` : "";
   try {
     await del(`/api/gains-passifs/${g.id}${uidParam}`);
     await charger();
