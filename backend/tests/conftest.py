@@ -1,4 +1,11 @@
+import os
+import sys
 import pytest
+
+_HERE = os.path.dirname(__file__)
+_BACKEND_ROOT = os.path.abspath(os.path.join(_HERE, ".."))
+if _BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, _BACKEND_ROOT)
 
 from app import create_app
 from app.extensions import db as _db

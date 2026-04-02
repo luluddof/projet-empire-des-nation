@@ -54,7 +54,8 @@ def test_callback_success_sets_session_and_redirects(client, monkeypatch):
     response = client.get("/api/auth/discord/callback?code=discord-code")
 
     assert response.status_code == 302
-    assert response.headers["Location"] == "http://localhost:5173/dashboard"
+    # Le frontend redirige ensuite vers /stocks ou autre selon l'état d'auth.
+    assert response.headers["Location"] == "http://localhost:5173/"
     with client.session_transaction() as session:
         assert session["discord_user"]["id"] == "42"
         assert session["discord_user"]["username"] == "empire"

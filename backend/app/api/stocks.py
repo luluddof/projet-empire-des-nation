@@ -13,7 +13,11 @@ from ..utils.gain_passif import (
     simuler_trois_tours,
     simuler_trois_tours_breakdown,
 )
-from ..utils.prix import prix_achat_pour_utilisateur, prix_modifie_pour_utilisateur
+from ..utils.prix import (
+    prix_achat_pour_utilisateur,
+    prix_lointain_pour_utilisateur,
+    prix_modifie_pour_utilisateur,
+)
 
 stocks_bp = Blueprint("stocks", __name__)
 
@@ -89,13 +93,17 @@ def get_stocks():
 @login_required
 def commerce_ressource_contre_florins():
     """
-    Achat : +quantité de ressource, débit florins au prix d'achat (× prix_achat).
+    Achat : +quantité de ressource, débit florins au prix d'achat (local) ou au prix lointain.
     Vente : −quantité de ressource, crédit florins au prix modifié (× prix_modifie).
     """
     uid = request.args.get("uid")
     cible_uid, me = _resolve_cible(uid)
     if uid and uid != me.id and not me.is_mj:
         return jsonify({"error": "Accès refusé"}), 403
+    # Règle : un MJ ne peut pas acheter/vendre pour un autre joueur.
+    # (Il peut en revanche ajuster les stocks via PUT /api/stocks/<rid>?uid=...)
+    if me.is_mj and uid and str(uid) != str(me.id):
+        return jsonify({"error": "Un MJ ne peut pas effectuer d'achat/vente pour un autre joueur"}), 403
 
     data = request.get_json() or {}
     sens = (data.get("sens") or "").strip().lower()
@@ -124,21 +132,27 @@ def commerce_ressource_contre_florins():
     stock_florins = _get_or_create_stock(cible_uid, florins_r.id)
     pf = prix_achat_pour_utilisateur(florins_r, cible_uid) or 1
     pa = prix_achat_pour_utilisateur(ressource, cible_uid)
+    pl = prix_lointain_pour_utilisateur(ressource, cible_uid)
     pm = prix_modifie_pour_utilisateur(ressource, cible_uid)
 
     if sens == "achat":
-        cout = quantite * pa
+        achat_mode = (data.get("achat_mode") or "local").strip().lower()
+        if achat_mode not in ("local", "lointain"):
+            return jsonify({"error": "achat_mode doit être 'local' ou 'lointain'"}), 400
+        prix_unitaire = pa if achat_mode == "local" else pl
+        cout = quantite * prix_unitaire
         if stock_florins.quantite < cout:
             return jsonify({"error": "Florins insuffisants pour cet achat"}), 400
         stock_res.quantite += quantite
         stock_florins.quantite -= cout
+        motif = "achat_marche_local" if achat_mode == "local" else "achat_marche_lointain"
         db.session.add(
             Transaction(
                 utilisateur_id=cible_uid,
                 ressource_id=ressource_id,
                 quantite=quantite,
-                valeur_florins=quantite * pa,
-                motif="achat_marche",
+                valeur_florins=quantite * prix_unitaire,
+                motif=motif,
             )
         )
         db.session.add(
@@ -147,7 +161,7 @@ def commerce_ressource_contre_florins():
                 ressource_id=florins_r.id,
                 quantite=-cout,
                 valeur_florins=-cout * pf,
-                motif="achat_marche",
+                motif=motif,
             )
         )
     else:

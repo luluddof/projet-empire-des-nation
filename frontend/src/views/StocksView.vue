@@ -41,6 +41,8 @@ const erreur = ref("");
 const modifEnCours = ref({});
 const sauvegarde = ref(false);
 
+const isMjOtherView = computed(() => isMj.value && mjRaw.mjVueChoix.value && String(mjRaw.mjVueChoix.value) !== currentUserIdStr.value);
+
 async function chargerUtilisateurs() {
   if (!isMj.value) return;
   try {
@@ -218,6 +220,7 @@ const stockFlorins = computed(() =>
 // --- Commerce (ressources ↔ florins) ---
 const commerceModal = ref(null);
 const commerceQte = ref(1);
+const commerceAchatMode = ref("local"); // local | lointain
 const commerceQteInputRef = ref(null);
 const commerceErr = ref("");
 const commerceLoading = ref(false);
@@ -226,16 +229,21 @@ const historiquePrix = ref([]);
 function ouvrirCommerce(stock, sens) {
   commerceModal.value = { stock, sens };
   commerceQte.value = 1;
+  commerceAchatMode.value = "local";
   commerceErr.value = "";
 }
 
-const commerceTotal = computed(() => {
+const commercePrixUnitaire = computed(() => {
   if (!commerceModal.value) return 0;
   const r = commerceModal.value.stock.ressource;
+  if (commerceModal.value.sens === "vente") return r.prix_modifie;
+  return commerceAchatMode.value === "lointain" ? r.prix_lointain : r.prix_achat;
+});
+
+const commerceTotal = computed(() => {
+  if (!commerceModal.value) return 0;
   const q = Math.max(0, Math.floor(Number(commerceQte.value) || 0));
-  return commerceModal.value.sens === "achat"
-    ? q * r.prix_achat
-    : q * r.prix_modifie;
+  return q * (Number(commercePrixUnitaire.value) || 0);
 });
 
 async function executerCommerce() {
@@ -247,16 +255,20 @@ async function executerCommerce() {
     return;
   }
   const uidParam =
-    isMj.value && selectedUid.value
-      ? `?uid=${encodeURIComponent(String(selectedUid.value))}`
+    isMj.value && mjRaw.mjVueChoix.value
+      ? `?uid=${encodeURIComponent(String(mjRaw.mjVueChoix.value))}`
       : "";
   commerceLoading.value = true;
   try {
-    await post(`/api/stocks/commerce${uidParam}`, {
+    const payload = {
       ressource_id: commerceModal.value.stock.ressource_id,
       quantite: q,
       sens: commerceModal.value.sens,
-    });
+    };
+    if (commerceModal.value.sens === "achat") {
+      payload.achat_mode = commerceAchatMode.value;
+    }
+    await post(`/api/stocks/commerce${uidParam}`, payload);
     commerceModal.value = null;
     await chargerStocks();
   } catch (e) {
@@ -430,6 +442,7 @@ function sortLabel(k) {
                 <button
                   type="button"
                   class="button small secondary"
+                  :disabled="isMjOtherView"
                   @click="ouvrirCommerce(s, 'achat')"
                 >
                   Acheter
@@ -437,6 +450,7 @@ function sortLabel(k) {
                 <button
                   type="button"
                   class="button small secondary"
+                  :disabled="isMjOtherView"
                   @click="ouvrirCommerce(s, 'vente')"
                 >
                   Vendre
@@ -469,15 +483,45 @@ function sortLabel(k) {
         </h3>
         <p class="modal-hint">
           <template v-if="commerceModal.sens === 'achat'">
-            Prix unitaire (achat) : {{ formatFlorin(commerceModal.stock.ressource.prix_achat) }}.
+            Prix unitaire :
+            <strong>{{ formatFlorin(commercePrixUnitaire) }}</strong>.
             Le montant est débité de votre stock « Florins ».
           </template>
           <template v-else>
-            Prix unitaire (revente) : {{ formatFlorin(commerceModal.stock.ressource.prix_modifie) }}.
+            Prix unitaire (revente) : <strong>{{ formatFlorin(commercePrixUnitaire) }}</strong>.
             Les florins sont ajoutés à votre stock « Florins ».
           </template>
         </p>
-        <PrixSparkline v-if="!estFlorins(commerceModal.stock)" :points="historiquePrix" />
+        <p v-if="isMjOtherView" class="error">
+          En tant que MJ, vous ne pouvez pas acheter/vendre pour un autre joueur. Utilisez uniquement l’ajustement manuel des stocks.
+        </p>
+        <div v-if="commerceModal.sens === 'achat'" class="commerce-mode">
+          <button
+            type="button"
+            :class="['button', 'secondary', 'small', commerceAchatMode === 'local' ? 'is-active' : '']"
+            @click="commerceAchatMode = 'local'"
+          >
+            Achat local
+          </button>
+          <button
+            type="button"
+            :class="['button', 'secondary', 'small', commerceAchatMode === 'lointain' ? 'is-active' : '']"
+            @click="commerceAchatMode = 'lointain'"
+          >
+            Achat lointain
+          </button>
+        </div>
+        <div v-if="!estFlorins(commerceModal.stock) && historiquePrix.length < 2" class="sparkline-single">
+          Historique insuffisant ({{ historiquePrix.length }} point) — achat/vente possible.
+        </div>
+        <PrixSparkline
+          v-else-if="!estFlorins(commerceModal.stock)"
+          :points="historiquePrix"
+          :value-key="commerceModal.sens === 'vente' ? 'prix_modifie' : 'prix_achat'"
+          :label="commerceModal.sens === 'vente'
+            ? 'Évolution du prix de revente catalogue (ƒ)'
+            : 'Évolution du prix d’achat catalogue (ƒ)'"
+        />
         <p v-if="commerceErr" class="error">{{ commerceErr }}</p>
         <label class="form-label">
           Quantité
@@ -489,10 +533,10 @@ function sortLabel(k) {
             class="input"
           />
         </label>
-        <p class="modal-total">
-          Total :
-          <strong :title="formatFlorinExact(commerceTotal)">{{ formatFlorin(commerceTotal) }}</strong>
-        </p>
+        <div class="modal-total" :title="formatFlorinExact(commerceTotal)">
+          <span class="modal-total-label">Total</span>
+          <strong class="modal-total-value">{{ formatFlorin(commerceTotal) }}</strong>
+        </div>
         <div class="modal-footer">
           <button
             class="button secondary"

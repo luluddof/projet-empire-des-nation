@@ -4,6 +4,8 @@ import { computed } from "vue";
 const props = defineProps({
   points: { type: Array, default: () => [] },
   label: { type: String, default: "Évolution du prix d’achat catalogue (ƒ)" },
+  /** Champ à tracer dans les points: 'prix_achat' (achat) ou 'prix_modifie' (revente). */
+  valueKey: { type: String, default: "prix_achat" },
 });
 
 const W = 340;
@@ -13,14 +15,15 @@ const PAD = 10;
 const pathD = computed(() => {
   const pts = props.points;
   if (!pts.length) return "";
-  const vals = pts.map((p) => Number(p.prix_achat) || 0);
+  const key = props.valueKey || "prix_achat";
+  const vals = pts.map((p) => Number(p?.[key]) || 0);
   const min = Math.min(...vals);
   const max = Math.max(...vals);
   const span = max - min || 1;
   const n = pts.length;
   return pts
     .map((p, i) => {
-      const v = Number(p.prix_achat) || 0;
+      const v = Number(p?.[key]) || 0;
       const x = PAD + (n === 1 ? (W - 2 * PAD) / 2 : (i / (n - 1)) * (W - 2 * PAD));
       const y = PAD + (1 - (v - min) / span) * (H - 2 * PAD);
       return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
@@ -32,11 +35,12 @@ const pathD = computed(() => {
 const pathDLine = computed(() => {
   if (props.points.length !== 1 || !pathD.value) return pathD.value;
   const pts = props.points;
-  const vals = pts.map((p) => Number(p.prix_achat) || 0);
+  const key = props.valueKey || "prix_achat";
+  const vals = pts.map((p) => Number(p?.[key]) || 0);
   const min = Math.min(...vals);
   const max = Math.max(...vals);
   const span = max - min || 1;
-  const v = Number(pts[0].prix_achat) || 0;
+  const v = Number(pts[0]?.[key]) || 0;
   const x = PAD + (W - 2 * PAD) / 2;
   const y = PAD + (1 - (v - min) / span) * (H - 2 * PAD);
   return `M${(x - 20).toFixed(1)},${y.toFixed(1)} L${(x + 20).toFixed(1)},${y.toFixed(1)}`;

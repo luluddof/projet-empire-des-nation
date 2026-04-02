@@ -112,3 +112,7 @@ def prix_achat_pour_utilisateur(ressource, utilisateur_id) -> int:
 
 def prix_modifie_pour_utilisateur(ressource, utilisateur_id) -> int:
     return prix_derives_pour_utilisateur(ressource, utilisateur_id)["prix_modifie"]
+
+
+def prix_lointain_pour_utilisateur(ressource, utilisateur_id) -> int:
+    return prix_derives_pour_utilisateur(ressource, utilisateur_id)["prix_lointain"]

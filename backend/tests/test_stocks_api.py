@@ -53,6 +53,44 @@ def test_commerce_achat(client_joueur, ids_ressources):
     assert body["stock_ressource"]["quantite"] == 1
 
 
+def test_commerce_achat_lointain(client_joueur, ids_ressources):
+    fid, aid = ids_ressources["florins"], ids_ressources["acier"]
+    r = client_joueur.put(f"/api/stocks/{fid}", json={"quantite": 100_000_000})
+    assert r.status_code == 200
+
+    r = client_joueur.post(
+        "/api/stocks/commerce",
+        json={
+            "ressource_id": aid,
+            "quantite": 1,
+            "sens": "achat",
+            "achat_mode": "lointain",
+        },
+    )
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["stock_ressource"]["quantite"] == 1
+
+
+def test_commerce_achat_mode_invalide(client_joueur, ids_ressources):
+    fid, aid = ids_ressources["florins"], ids_ressources["acier"]
+    r = client_joueur.put(f"/api/stocks/{fid}", json={"quantite": 100_000_000})
+    assert r.status_code == 200
+
+    r = client_joueur.post(
+        "/api/stocks/commerce",
+        json={
+            "ressource_id": aid,
+            "quantite": 1,
+            "sens": "achat",
+            "achat_mode": "bizarre",
+        },
+    )
+    assert r.status_code == 400
+    assert "achat_mode" in (r.get_json() or {}).get("error", "")
+
+
 def test_commerce_vente_insuffisant(client_joueur, ids_ressources):
     aid = ids_ressources["acier"]
     r = client_joueur.post(
@@ -194,7 +232,14 @@ def test_mj_peut_stocks_et_gains_passifs_autre(client_mj, app, ids_ressources):
     data = r.get_json()
     assert isinstance(data, list)
 
+    # MJ : peut consulter, mais ne peut pas acheter/vendre pour un autre joueur
     rid = ids_ressources["acier"]
+    r = client_mj.post(
+        "/api/stocks/commerce?uid=101",
+        json={"ressource_id": rid, "quantite": 1, "sens": "achat", "achat_mode": "local"},
+    )
+    assert r.status_code == 403
+
     r = client_mj.post(
         f"/api/gains-passifs?uid=101",
         json={
