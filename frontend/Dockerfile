@@ -1,9 +1,12 @@
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package.json ./
+# Le package-lock est généré sur Windows : il peut omettre les binaires optionnels
+# nécessaires sous Linux (ex. Rollup). Dans l'image Docker, on fait une install
+# "native Linux" et on n'utilise pas le lockfile.
+RUN npm install --no-package-lock
 
 COPY . .
 

@@ -23,7 +23,7 @@ import time
 from datetime import UTC, datetime
 
 from ..extensions import db
-from ..models import GainPassif, Ressource, Stock, Utilisateur
+from ..models import GainPassif, Ressource, Stock, Transaction, Utilisateur
 from ..scheduler.tours import _appliquer_gains_passifs
 from ..utils.prix import recalcule_prix_ressource
 from ..utils.prix_snapshot import enregistrer_snapshot_prix
@@ -106,7 +106,24 @@ def _appliquer_choc_prix(noms: list[str], facteurs_pct: list[float]) -> None:
 
 
 def _deja_initialise() -> bool:
-    return db.session.get(Utilisateur, MOCK_IDS["alice"]) is not None
+    """
+    Le mock doit être idempotent, mais on évite de "bloquer" sur une initialisation partielle.
+    Si les utilisateurs existent mais qu'il manque les gains passifs ou les transactions,
+    on ré-exécute le mock pour compléter la base.
+    """
+    alice = db.session.get(Utilisateur, MOCK_IDS["alice"])
+    if alice is None:
+        return False
+    gains = GainPassif.query.filter_by(utilisateur_id=MOCK_IDS["alice"]).count()
+    if gains <= 0:
+        return False
+    tx_gain = Transaction.query.filter_by(
+        utilisateur_id=MOCK_IDS["alice"],
+        motif="gain_passif",
+    ).count()
+    if tx_gain <= 0:
+        return False
+    return True
 
 
 def run_dev_mock_once(app) -> None:
