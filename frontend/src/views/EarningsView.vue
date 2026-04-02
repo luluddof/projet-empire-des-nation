@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch, proxyRefs } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import MjViewSelect from "../components/MjViewSelect.vue";
 import { useMjView } from "../composables/useMjView.js";
@@ -22,14 +22,14 @@ const isMj = computed(() => props.authState.user?.is_mj);
 const currentUserIdStr = computed(() => String(props.authState.user?.id ?? ""));
 
 const utilisateurs = ref([]);
-const mj = proxyRefs(useMjView({
+const mj = useMjView({
   authState: props.authState,
   utilisateursListeRef: utilisateurs,
   isMjRef: isMj,
   currentUserIdStrRef: currentUserIdStr,
   allowGlobal: false,
   storageKey: "mj_view_choice_uid",
-}));
+});
 const data = ref({ transactions: [], total: 0, pages: 1, page: 1 });
 const erreur = ref("");
 const page = ref(1);

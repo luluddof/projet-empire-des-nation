@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, reactive, ref, watch, proxyRefs } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import PrixSparkline from "../components/PrixSparkline.vue";
 import MjViewSelect from "../components/MjViewSelect.vue";
@@ -24,14 +24,14 @@ const isMj = computed(() => props.authState.user?.is_mj);
 const currentUserIdStr = computed(() => String(props.authState.user?.id ?? ""));
 
 const utilisateurs = ref([]);
-const mj = proxyRefs(useMjView({
+const mj = useMjView({
   authState: props.authState,
   utilisateursListeRef: utilisateurs,
   isMjRef: isMj,
   currentUserIdStrRef: currentUserIdStr,
   allowGlobal: false,
   storageKey: "mj_view_choice_uid",
-}));
+});
 const stocks = ref([]);
 const gainsPassifs = ref([]);
 const erreur = ref("");
