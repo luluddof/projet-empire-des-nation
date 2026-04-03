@@ -90,6 +90,7 @@ function pctToBar(uid, pct) {
           :min="(catForm.id == null || catModMode === 'set') ? 10 : 0.1"
             :value="catForm.modificateur_pct"
             @focus="(e) => e.target.select()"
+            @click="(e) => e.target.select()"
             @input="emit('update:modificateur_pct', Number($event.target.value))"
           />
         </label>

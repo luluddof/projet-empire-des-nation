@@ -3,7 +3,7 @@ from flask import Blueprint, jsonify, request
 from ..data.seed import NOM_RESSOURCE_FLORINS
 from ..extensions import db
 from ..models import GainPassif, Ressource, Stock, Transaction
-from ..utils.decorators import get_current_user, login_required
+from ..utils.decorators import get_current_user, login_required, mj_required
 from ..utils.gain_passif import (
     BALISE_LABELS,
     normaliser_balise,
@@ -49,7 +49,7 @@ def _get_or_create_stock(utilisateur_id, ressource_id):
 @login_required
 def list_balises_gains_passifs():
     # Retour pour pilotage UI : {id,label}
-    order = ["science", "politique", "evenement", "batiment", "autre"]
+    order = ["science", "politique", "evenement", "batiment", "recolte_fructueuse", "autre"]
     out = []
     for k in order:
         if k in BALISE_LABELS:
@@ -200,7 +200,7 @@ def commerce_ressource_contre_florins():
 
 
 @stocks_bp.put("/api/stocks/<int:ressource_id>")
-@login_required
+@mj_required
 def update_stock(ressource_id):
     uid = request.args.get("uid")
     cible_uid, me = _resolve_cible(uid)
@@ -242,7 +242,7 @@ def _erreur_pourcentage(mode, quantite_par_tour):
         return None
     q = int(quantite_par_tour)
     if q < -1000 or q > 1000:
-        return "En mode pourcentage, la valeur doit être entre -1000 et 1000 (% du stock avant la ligne)."
+        return "En mode pourcentage, la valeur doit être entre -1000 et 1000 (% de la production du tour avant cette ligne)."
     return None
 
 
@@ -409,6 +409,8 @@ def create_gain_passif():
 
     mode = normaliser_mode(data.get("mode_production"))
     balise = normaliser_balise(data.get("balise"))
+    if balise == "recolte_fructueuse":
+        return jsonify({"error": "La justification « récolte fructueuse » est réservée au système (bonus de tirage)."}), 400
     err_pct = _erreur_pourcentage(mode, quantite_par_tour)
     if err_pct:
         return jsonify({"error": err_pct}), 400
@@ -475,7 +477,10 @@ def update_gain_passif(gain_id):
                 return jsonify({"error": "tours_restants requis (>0) pour un gain temporaire"}), 400
             gain.tours_restants = int(tr)
     if "balise" in data:
-        gain.balise = normaliser_balise(data["balise"])
+        b = normaliser_balise(data["balise"])
+        if b == "recolte_fructueuse":
+            return jsonify({"error": "La justification « récolte fructueuse » est réservée au système (bonus de tirage)."}), 400
+        gain.balise = b
     if "mode_production" in data:
         gain.mode_production = normaliser_mode(data["mode_production"])
 

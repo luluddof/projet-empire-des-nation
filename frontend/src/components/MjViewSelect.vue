@@ -1,4 +1,6 @@
 <script setup>
+import { computed } from "vue";
+
 const props = defineProps({
   open: { type: Boolean, required: true },
   label: { type: String, required: true },
@@ -10,6 +12,13 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["update:open", "update:search", "select"]);
+
+const orderedOptions = computed(() => {
+  const all = Array.isArray(props.options) ? props.options : [];
+  const me = all.find((u) => String(u?.id) === String(props.currentUserIdStr));
+  const others = all.filter((u) => String(u?.id) !== String(props.currentUserIdStr));
+  return me ? [me, ...others] : others;
+});
 </script>
 
 <template>
@@ -54,7 +63,7 @@ const emit = defineEmits(["update:open", "update:search", "select"]);
           />
           <div class="mj-view-list">
             <button
-              v-for="u in options"
+              v-for="u in orderedOptions"
               :key="u.id"
               type="button"
               class="mj-view-option"

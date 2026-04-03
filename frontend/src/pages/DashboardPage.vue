@@ -1,12 +1,14 @@
 <script setup>
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
+import { clearMjViewLocalStorage } from "../authState.js";
 
 const router = useRouter();
 const user = ref(null);
 
 const logout = async () => {
   await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+  clearMjViewLocalStorage();
   router.replace("/");
 };
 

@@ -2,15 +2,45 @@ import { computed, ref, watch } from "vue";
 import { useApi, FLORINS_NOM } from "../../../composables/useApi.js";
 import { usePlayerPicker } from "./usePlayerPicker.js";
 
+const BULK_CHART_COLORS = [
+  "#a5b4fc",
+  "#f472b6",
+  "#34d399",
+  "#fbbf24",
+  "#f87171",
+  "#38bdf8",
+  "#c084fc",
+  "#fb923c",
+  "#4ade80",
+  "#facc15",
+  "#2dd4bf",
+  "#e879f9",
+];
+
+function pctModCatalogue(r) {
+  if (!r) return 100;
+  const p = Number(r.modificateur_pct);
+  return Number.isFinite(p) && p > 0 ? Math.round(p * 10) / 10 : 100;
+}
+
+function calcNewPct(current, delta, mode) {
+  let val;
+  if (mode === "set") val = delta;
+  else if (mode === "add") val = current + delta;
+  else val = current - delta;
+  return Math.round(val * 10) / 10;
+}
+
 export function useBulkPrix({
   isMjRef,
   mjVueChoixRef,
   currentUserIdStrRef,
   utilisateursListeRef,
   ressourcesFiltreesRef,
+  ressourcesRef,
   chargerRessources,
 }) {
-  const { post } = useApi();
+  const { post, get } = useApi();
 
   const selectedIds = ref([]);
   const bulkModal = ref(false);
@@ -20,6 +50,14 @@ export function useBulkPrix({
   const bulkUserSearch = ref("");
   const bulkErr = ref("");
   const bulkLoading = ref(false);
+  const bulkHistoriqueLoading = ref(false);
+  const bulkHistoriqueErr = ref("");
+
+  /**
+   * Modificateurs effectifs par ressource et par joueur.
+   * { resourceId: { uid: { modificateur_pct, prix_achat, ... } } }
+   */
+  const bulkPlayerMods = ref({});
 
   function idSelectionne(id) {
     return selectedIds.value.includes(id);
@@ -52,7 +90,6 @@ export function useBulkPrix({
   function bulkUserSelected(uid) {
     return bulkUserIds.value.includes(String(uid));
   }
-
   function bulkSelectAllUsers() {
     bulkUserIds.value = (utilisateursListeRef.value || []).map((u) => String(u.id));
   }
@@ -121,6 +158,126 @@ export function useBulkPrix({
 
   const bulkUserVisibleJoueurs = computed(() => picker.visible.value);
 
+  function libelleJoueur(uid) {
+    const u = (utilisateursListeRef.value || []).find((x) => String(x.id) === String(uid));
+    if (u && String(u.id) === String(currentUserIdStrRef.value)) return `Vous — ${u.username}`;
+    if (u) return u.username;
+    return `Joueur ${uid}`;
+  }
+
+  // ── Chargement des modificateurs joueurs ─────────────────────────────────
+  async function chargerPlayerMods(ids, uids) {
+    if (ids.length === 0) { bulkPlayerMods.value = {}; return; }
+    if (uids.length === 0) { bulkPlayerMods.value = {}; return; }
+    const uidQs = uids.map((u) => `utilisateur_ids=${encodeURIComponent(String(u))}`).join("&");
+    const results = await Promise.allSettled(
+      ids.map((id) => get(`/api/ressources/${id}/modificateur-joueur?${uidQs}`)),
+    );
+    const mods = {};
+    ids.forEach((id, i) => {
+      const res = results[i];
+      mods[Number(id)] =
+        res.status === "fulfilled" && res.value?.valeurs ? res.value.valeurs : {};
+    });
+    bulkPlayerMods.value = mods;
+  }
+
+  async function chargerBulkData() {
+    bulkHistoriqueErr.value = "";
+    const ids = [...selectedIds.value];
+    const uids = bulkUserIds.value || [];
+    if (ids.length === 0) { bulkPlayerMods.value = {}; return; }
+    bulkHistoriqueLoading.value = true;
+    try {
+      await chargerPlayerMods(ids, uids);
+    } catch (e) {
+      bulkHistoriqueErr.value = e.message;
+    } finally {
+      bulkHistoriqueLoading.value = false;
+    }
+  }
+
+  // Re-charger quand la modale s'ouvre ou que les ressources sélectionnées changent.
+  watch(
+    () => ({ open: bulkModal.value, ids: [...selectedIds.value].sort((a, b) => a - b).join(",") }),
+    ({ open }) => { if (!open) return; void chargerBulkData(); },
+  );
+
+  // Re-charger quand la sélection de joueurs change (modale ouverte).
+  watch(
+    () => (bulkUserIds.value || []).slice().sort().join(","),
+    async (cur, prev) => {
+      if (cur === prev || !bulkModal.value) return;
+      const ids = [...selectedIds.value];
+      const uids = bulkUserIds.value || [];
+      bulkHistoriqueLoading.value = true;
+      try {
+        await chargerPlayerMods(ids, uids);
+      } finally {
+        bulkHistoriqueLoading.value = false;
+      }
+    },
+  );
+
+  // ── Panneaux d'aperçu ─────────────────────────────────────────────────────
+  /**
+   * Un panneau par ressource sélectionnée.
+   * Chaque panneau : { key, title, players: [{ key, nom, color, currentPct, newPct, isDefault, invalid }] }
+   */
+  const bulkPreviewPanels = computed(() => {
+    const ids = selectedIds.value;
+    const uids = bulkUserIds.value || [];
+    const liste = ressourcesRef?.value || [];
+    const delta = Number(bulkPct.value) || 0;
+    const mode = bulkModMode.value;
+
+    return ids.map((id) => {
+      const r = liste.find((x) => Number(x.id) === Number(id));
+      const catalogueMod = pctModCatalogue(r);
+      const nom = r?.nom ?? `Ressource #${id}`;
+
+      if (uids.length === 0) {
+        const newPct = calcNewPct(catalogueMod, delta, mode);
+        return {
+          key: `r-${id}`,
+          title: nom,
+          players: [{
+            key: `r-${id}-catalog`,
+            nom: "Catalogue global",
+            color: BULK_CHART_COLORS[0],
+            currentPct: catalogueMod,
+            newPct,
+            isDefault: false,
+            invalid: newPct <= 0,
+          }],
+        };
+      }
+
+      const ressourceMods = bulkPlayerMods.value[Number(id)] || {};
+      return {
+        key: `r-${id}`,
+        title: nom,
+        players: uids.map((uid, i) => {
+          const playerData = ressourceMods[String(uid)] ?? null;
+          const currentPct =
+            playerData?.modificateur_pct != null
+              ? Math.round(Number(playerData.modificateur_pct) * 10) / 10
+              : 100;
+          const newPct = calcNewPct(currentPct, delta, mode);
+          return {
+            key: `r-${id}-u-${uid}`,
+            nom: libelleJoueur(uid),
+            color: BULK_CHART_COLORS[i % BULK_CHART_COLORS.length],
+            currentPct,
+            newPct,
+            isDefault: playerData == null,
+            invalid: newPct <= 0,
+          };
+        }),
+      };
+    });
+  });
+
   return {
     selectedIds,
     bulkModal,
@@ -142,6 +299,8 @@ export function useBulkPrix({
     bulkClearAllUsers,
     bulkAllUsersSelected,
     appliquerBulkPrix,
+    bulkHistoriqueLoading,
+    bulkHistoriqueErr,
+    bulkPreviewPanels,
   };
 }
-

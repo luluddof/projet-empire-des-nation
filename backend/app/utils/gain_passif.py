@@ -1,6 +1,8 @@
 """Calcul des effets des gains passifs (quantité fixe ou % de la production du tour)."""
 
-BALISES_VALIDES = frozenset({"science", "politique", "evenement", "batiment", "autre"})
+BALISES_VALIDES = frozenset(
+    {"science", "politique", "evenement", "batiment", "recolte_fructueuse", "autre"}
+)
 MODES_VALIDES = frozenset({"fixe", "pourcentage"})
 
 # Libellés UI (utilisés pour construire les options sur le front).
@@ -9,6 +11,7 @@ BALISE_LABELS = {
     "politique": "Politique",
     "evenement": "Événement",
     "batiment": "Bâtiment",
+    "recolte_fructueuse": "Récolte fructueuse",
     "autre": "Autre",
 }
 
@@ -28,11 +31,37 @@ def normaliser_mode(v):
 
 
 def delta_ligne(production_avant: int, gain) -> int:
-    """Effet d’une règle sur la production du tour, selon la production *avant* cette ligne (ordre par id)."""
+    """
+    Effet d’une règle sur la production du tour, selon la production *cumulée avant* cette ligne (ordre par id).
+    Mode pourcentage : % de cette production (pas du stock total). Valeur déterministe (troncature) pour aperçu.
+    """
     mode = normaliser_mode(getattr(gain, "mode_production", None))
     if mode == "pourcentage":
-        return int(production_avant * int(gain.quantite_par_tour) / 100)
+        raw = production_avant * int(gain.quantite_par_tour) / 100.0
+        return int(raw)
     return int(gain.quantite_par_tour)
+
+
+def tirage_pourcentage_sur_production_tour(raw: float, rng) -> tuple:
+    """
+    Applique le % sur la production du tour au moment du calcul réel (scheduler) :
+    partie entière (troncature vers zéro) + tirage sur la partie fractionnaire pour ±1 unité.
+
+    Retourne (q_total, base_trunc, extra, recolte_bonus_0_ou_1)
+    - recolte_bonus_0_ou_1 vaut 1 si un +1 « bonus » a été obtenu par tirage (trace séparée « récolte fructueuse »).
+    """
+    base = int(raw)
+    frac = raw - base
+    extra = 0
+    if raw > 0 and frac > 1e-12:
+        if rng.random() < frac:
+            extra = 1
+    elif raw < 0 and frac < -1e-12:
+        if rng.random() < (-frac):
+            extra = -1
+    q_total = base + extra
+    recolte = 1 if extra > 0 else 0
+    return q_total, base, extra, recolte
 
 
 def net_un_tour(gains, stock_initial: int) -> int:

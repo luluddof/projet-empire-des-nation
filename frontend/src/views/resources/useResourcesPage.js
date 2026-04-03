@@ -28,6 +28,9 @@ export function useResourcesPage(authState) {
     utilisateursListeRef: data.utilisateursListe,
     isMjRef: isMj,
     currentUserIdStrRef: currentUserIdStr,
+    allowGlobal: true,
+    // Même clé que les autres pages pour conserver le joueur observé en naviguant.
+    storageKey: "mj_view_choice_uid",
   });
 
   async function chargerRessources() {
@@ -60,6 +63,7 @@ export function useResourcesPage(authState) {
     currentUserIdStrRef: currentUserIdStr,
     utilisateursListeRef: data.utilisateursListe,
     ressourcesFiltreesRef: list.ressourcesFiltrees,
+    ressourcesRef: data.ressources,
     chargerRessources,
   });
 

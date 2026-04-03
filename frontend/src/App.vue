@@ -1,13 +1,13 @@
 <script setup>
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import NavBar from "./components/NavBar.vue";
+import { authLoading, authState, clearMjViewLocalStorage } from "./authState.js";
 
 /** Vide = requêtes relatives via proxy Vite (cookie de session sur :5173). */
 const apiBase = import.meta.env.VITE_API_BASE ?? "";
 const router = useRouter();
 
-const authState = ref({ authenticated: false, user: null });
 const loading = ref(true);
 const errorMessage = ref("");
 
@@ -21,6 +21,7 @@ const readErrorFromUrl = () => {
 
 const fetchMe = async () => {
   loading.value = true;
+  authLoading.value = true;
   try {
     const res = await fetch(`${apiBase}/api/auth/me`, { credentials: "include" });
     authState.value = await res.json();
@@ -28,6 +29,7 @@ const fetchMe = async () => {
     errorMessage.value = "Impossible de contacter le serveur.";
   } finally {
     loading.value = false;
+    authLoading.value = false;
   }
 };
 
@@ -37,6 +39,7 @@ const loginWithDiscord = () => {
 
 const logout = async () => {
   await fetch(`${apiBase}/api/auth/logout`, { method: "POST", credentials: "include" });
+  clearMjViewLocalStorage();
   authState.value = { authenticated: false, user: null };
   router.push("/");
 };
@@ -48,6 +51,15 @@ onMounted(async () => {
     router.push("/stocks");
   }
 });
+
+watch(
+  () => authState.value.authenticated,
+  (ok) => {
+    if (!ok && router.currentRoute.value.meta?.requiresAuth) {
+      router.replace("/");
+    }
+  },
+);
 </script>
 
 <template>
@@ -63,6 +75,7 @@ onMounted(async () => {
     <router-view
       :auth-state="authState"
       :error-message="errorMessage"
+      :refresh-auth="fetchMe"
       @login="loginWithDiscord"
     />
   </template>

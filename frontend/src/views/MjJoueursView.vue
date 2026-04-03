@@ -4,6 +4,7 @@ import { useApi } from "../composables/useApi.js";
 
 const props = defineProps({
   authState: { type: Object, required: true },
+  refreshAuth: { type: Function, required: false },
 });
 
 const { get, patch } = useApi();
@@ -61,6 +62,11 @@ async function basculerMj(u, event) {
     });
     const i = utilisateurs.value.findIndex((x) => x.id === u.id);
     if (i >= 0) utilisateurs.value[i] = updated;
+    // Si on vient de modifier le rôle du user courant, rafraîchir /api/auth/me
+    // pour que toutes les pages basculent MJ/joueur sans reload manuel.
+    if (String(props.authState.user?.id ?? "") === String(updated.id)) {
+      await props.refreshAuth?.();
+    }
   } catch (e) {
     erreur.value = e.message;
     event.target.checked = !checked;

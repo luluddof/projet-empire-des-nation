@@ -1,6 +1,7 @@
 """Tests unitaires des calculs de gains passifs (fixe / pourcentage)."""
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from app.utils.gain_passif import (
     delta_ligne,
@@ -8,6 +9,7 @@ from app.utils.gain_passif import (
     normaliser_balise,
     normaliser_mode,
     simuler_trois_tours,
+    tirage_pourcentage_sur_production_tour,
 )
 
 
@@ -27,6 +29,36 @@ def test_delta_ligne_fixe():
 def test_delta_ligne_pourcentage():
     g = SimpleNamespace(quantite_par_tour=-25, mode_production="pourcentage")
     assert delta_ligne(100, g) == -25
+
+
+def test_tirage_pourcentage_bonus_1_5():
+    rng = MagicMock()
+    rng.random.return_value = 0.1
+    q_total, base, extra, recolte = tirage_pourcentage_sur_production_tour(1.5, rng)
+    assert base == 1
+    assert extra == 1
+    assert q_total == 2
+    assert recolte == 1
+
+
+def test_tirage_pourcentage_sans_bonus_1_5():
+    rng = MagicMock()
+    rng.random.return_value = 0.99
+    q_total, base, extra, recolte = tirage_pourcentage_sur_production_tour(1.5, rng)
+    assert base == 1
+    assert extra == 0
+    assert q_total == 1
+    assert recolte == 0
+
+
+def test_tirage_pourcentage_point_cinq():
+    rng = MagicMock()
+    rng.random.return_value = 0.3
+    q_total, base, extra, recolte = tirage_pourcentage_sur_production_tour(0.5, rng)
+    assert base == 0
+    assert extra == 1
+    assert q_total == 1
+    assert recolte == 1
 
 
 def test_net_un_tour_tri_par_id():

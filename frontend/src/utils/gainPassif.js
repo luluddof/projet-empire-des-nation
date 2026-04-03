@@ -26,6 +26,7 @@ export const BALISE_LABELS = {
   politique: "Politique",
   evenement: "Événement",
   batiment: "Bâtiment",
+  recolte_fructueuse: "Récolte fructueuse",
   autre: "Autre",
 };
 
@@ -38,7 +39,7 @@ export function formatEffetProduction(g) {
   const q = g.quantite_par_tour;
   if (mode === "pourcentage") {
     const s = q > 0 ? `+${q}` : String(q);
-    return `${s} % de la production`;
+    return `${s} % de la prod. du tour (avant cette ligne)`;
   }
   const s = q > 0 ? `+${q}` : String(q);
   return `${s} unités`;

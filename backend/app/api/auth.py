@@ -137,7 +137,25 @@ def me():
     discord_user = session.get("discord_user")
     if not discord_user:
         return jsonify({"authenticated": False})
-    return jsonify({"authenticated": True, "user": discord_user})
+    uid = str(discord_user.get("id", "") or "").strip()
+    if not uid:
+        session.pop("discord_user", None)
+        return jsonify({"authenticated": False})
+
+    user = db.session.get(Utilisateur, uid)
+    if user is None:
+        session.pop("discord_user", None)
+        return jsonify({"authenticated": False})
+
+    # Source de vérité = DB (is_mj peut changer via l’UI MJ).
+    payload = {
+        "id": user.id,
+        "username": user.username,
+        "avatar": user.avatar,
+        "is_mj": bool(user.is_mj),
+    }
+    session["discord_user"] = payload
+    return jsonify({"authenticated": True, "user": payload})
 
 
 @auth_bp.post("/api/auth/logout")

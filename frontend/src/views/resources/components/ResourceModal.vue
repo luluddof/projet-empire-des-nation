@@ -88,7 +88,15 @@ function pctToBar(uid, pct) {
             </select>
           </label>
           <label>Prix de base (ƒ, entier)
-            <input class="input" type="number" min="0" :value="form.prix_base" @input="emit('update:prix_base', Number($event.target.value))" />
+            <input
+              class="input"
+              type="number"
+              min="0"
+              :value="form.prix_base"
+              @focus="(e) => e.target.select()"
+              @click="(e) => e.target.select()"
+              @input="emit('update:prix_base', Number($event.target.value))"
+            />
           </label>
           <label>
             <span v-if="!modeEdition || resModMode === 'set'">% modificateur ressource</span>
@@ -100,6 +108,7 @@ function pctToBar(uid, pct) {
               :min="(!modeEdition || resModMode === 'set') ? 10 : 0.1"
               :value="form.modificateur_pct"
               @focus="(e) => e.target.select()"
+              @click="(e) => e.target.select()"
               @input="emit('update:modificateur_pct', Number($event.target.value))"
             />
           </label>

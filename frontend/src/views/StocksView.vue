@@ -35,9 +35,21 @@ const mjRaw = useMjView({
 // Pour le template : évite de passer des Ref en props (Vue ne dé-référence pas
 // automatiquement les refs imbriquées dans un objet normal).
 const mj = proxyRefs(mjRaw);
+const VOIR_TOUTES_KEY = "stocks_voir_toutes_ressources";
+
+function readVoirToutesPref() {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(VOIR_TOUTES_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 const stocks = ref([]);
 const gainsPassifs = ref([]);
 const erreur = ref("");
+/** Faux : vue réduite (possédé, achetable au moins ×1 au prix local, ou production / gain passif). */
+const voirToutesLesRessources = ref(readVoirToutesPref());
 const modifEnCours = ref({});
 const sauvegarde = ref(false);
 
@@ -84,6 +96,13 @@ function syncMjUidFromRoute() {
 
 watch(() => mjRaw.mjVueChoix.value, chargerStocks);
 watch([() => utilisateurs.value, () => route.query.uid], syncMjUidFromRoute, { immediate: true });
+watch(voirToutesLesRessources, (v) => {
+  try {
+    localStorage.setItem(VOIR_TOUTES_KEY, v ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+});
 chargerUtilisateurs();
 chargerStocks();
 
@@ -149,15 +168,15 @@ const nbModifications = computed(
 
 const sort = reactive({ key: "nom", dir: "asc" });
 
-const colonnesTri = [
+const colonnesTri = computed(() => [
   ["nom", "Ressource"],
   ["type", "Type"],
   ["quantite", "Stock actuel"],
-  ["nouvelle_qte", "Nouvelle quantité"],
+  ...(isMj.value ? [["nouvelle_qte", "Nouvelle quantité"]] : []),
   ["gain_tour", "Prod. prochain tour"],
   ["commerce", "Achat / vente"],
   ["valeur", "Valeur stock (ƒ)"],
-];
+]);
 
 function gainTourPourTri(stock) {
   const list = gainsParRid.value[stock.ressource_id] || [];
@@ -167,7 +186,7 @@ function gainTourPourTri(stock) {
 const stocksTries = computed(() => {
   const key = sort.key;
   const dir = sort.dir === "asc" ? 1 : -1;
-  const sorted = [...stocks.value].sort((a, b) => {
+  const sorted = [...stocksFiltres.value].sort((a, b) => {
     let va;
     let vb;
     switch (key) {
@@ -216,6 +235,32 @@ const stocksTries = computed(() => {
 const stockFlorins = computed(() =>
   stocks.value.find((s) => s.ressource.nom === FLORINS_NOM)
 );
+
+/**
+ * Vue réduite : monnaie toujours visible ; sinon stock > 0, règle(s) de gain passif,
+ * production nette au prochain tour, ou solde florins suffisant pour au moins 1 unité au prix d’achat local.
+ */
+function ressourceVisibleDansVueStocks(stock) {
+  if (stock.ressource.nom === FLORINS_NOM) return true;
+  const q = qteAffichee(stock);
+  if (q > 0) return true;
+  const rid = stock.ressource_id;
+  const gainsList = gainsParRid.value[rid] || [];
+  if (gainsList.length > 0) return true;
+  if (gainTourPourTri(stock) !== 0) return true;
+  const florinsQ = stockFlorins.value ? qteAffichee(stockFlorins.value) : 0;
+  const pa = Number(stock.ressource.prix_achat) || 0;
+  if (pa <= 0) return true;
+  return florinsQ >= pa;
+}
+
+const stocksFiltres = computed(() => {
+  if (voirToutesLesRessources.value) return stocks.value;
+  return stocks.value.filter(ressourceVisibleDansVueStocks);
+});
+
+const nbStocksTotal = computed(() => stocks.value.length);
+const nbStocksFiltres = computed(() => stocksFiltres.value.length);
 
 // --- Commerce (ressources ↔ florins) ---
 const commerceModal = ref(null);
@@ -337,7 +382,8 @@ function sortLabel(k) {
       <div>
         <h2 class="page-title">Gestion des Stocks</h2>
         <p class="page-subtitle">
-          Modifiez les quantités puis sauvegardez.
+          <template v-if="isMj">Modifiez les quantités puis sauvegardez.</template>
+          <template v-else>Consultez vos stocks et effectuez des achats/ventes.</template>
           <span
             v-if="stockFlorins"
             class="solde-florins"
@@ -366,6 +412,7 @@ function sortLabel(k) {
           @select="mj.mjVueSetChoix"
         />
         <button
+          v-if="isMj"
           class="button"
           :disabled="nbModifications === 0 || sauvegarde"
           @click="sauvegarderTout"
@@ -376,6 +423,17 @@ function sortLabel(k) {
     </div>
 
     <p v-if="erreur" class="error">{{ erreur }}</p>
+
+    <div class="stocks-toolbar">
+      <label class="stocks-toggle-all">
+        <input v-model="voirToutesLesRessources" type="checkbox" />
+        <span>Afficher toutes les ressources du catalogue</span>
+      </label>
+      <p v-if="!voirToutesLesRessources" class="stocks-filter-meta">
+        {{ nbStocksFiltres }} / {{ nbStocksTotal }} ressources visibles (possédées, achetables au moins une fois au
+        prix local, ou avec production / gain passif).
+      </p>
+    </div>
 
     <div class="table-wrap">
       <table class="data-table">
@@ -406,7 +464,7 @@ function sortLabel(k) {
             <td class="prix" :title="titleStockQuantite(s)">
               {{ affichageStockQuantite(s) }}
             </td>
-            <td>
+            <td v-if="isMj">
               <input
                 type="number"
                 class="input-qty"
@@ -531,6 +589,8 @@ function sortLabel(k) {
             type="number"
             min="1"
             class="input"
+            @focus="(e) => e.target.select()"
+            @click="(e) => e.target.select()"
           />
         </label>
         <div class="modal-total" :title="formatFlorinExact(commerceTotal)">
@@ -558,3 +618,39 @@ function sortLabel(k) {
 
   </div>
 </template>
+
+<style scoped>
+.stocks-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  max-width: 100%;
+}
+
+.stocks-toggle-all {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #e2e8f0;
+  margin: 0;
+}
+
+.stocks-toggle-all input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.stocks-filter-meta {
+  margin: 0;
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.45;
+}
+</style>

@@ -25,7 +25,7 @@ class GainPassif(db.Model):
     delai_tours = db.Column(db.Integer, nullable=False, default=0)
     # science | politique | evenement | batiment | autre
     balise = db.Column(db.String(20), nullable=False, default="autre")
-    # fixe = unités ; pourcentage = quantite_par_tour interprété comme % du stock avant la ligne
+    # fixe = unités ; pourcentage = % de la production cumulée du tour avant cette ligne (ordre id)
     mode_production = db.Column(db.String(20), nullable=False, default="fixe")
 
     ressource = db.relationship("Ressource")

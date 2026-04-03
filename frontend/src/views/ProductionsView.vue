@@ -35,6 +35,14 @@ const chronologie = ref(null);
 const erreur = ref("");
 const gainQteInputRef = ref(null);
 
+/** Sélectionne toute la valeur ; rAF aide certains navigateurs sur `type="number"`. */
+function selectAllInputText(e) {
+  const el = e.target;
+  requestAnimationFrame(() => {
+    if (typeof el.select === "function") el.select();
+  });
+}
+
 const sort = reactive({ key: "nom", dir: "asc" });
 
 const ressourceIdFiltre = computed(() => {
@@ -49,6 +57,18 @@ const nomRessourceFiltre = computed(() => {
   const r = ressourcesListe.value.find((x) => x.id === ressourceIdFiltre.value);
   return r?.nom ?? chronologie.value?.ressource?.nom ?? "";
 });
+
+/** Query route /productions en conservant le joueur MJ (uid) ; `ressource` omis = vue globale. */
+function buildProductionsQuery({ ressource } = {}) {
+  const q = {};
+  if (ressource != null && ressource !== "") q.ressource = String(ressource);
+  if (isMj.value && mjRaw.mjVueChoix.value) {
+    q.uid = String(mjRaw.mjVueChoix.value);
+  }
+  return q;
+}
+
+const productionsQueryAll = computed(() => buildProductionsQuery({}));
 
 async function chargerUtilisateurs() {
   if (!isMj.value) return;
@@ -85,6 +105,11 @@ function libelleBalise(b) {
   const map = new Map((balisesDisponibles.value || []).map((x) => [x.id, x.label]));
   return map.get(b) ?? map.get("autre") ?? b ?? "—";
 }
+
+/** Justifications choisissables à la main (la récolte fructueuse est réservée au tirage automatique). */
+const balisesFormulaireProduction = computed(() =>
+  (balisesDisponibles.value || []).filter((b) => b.id !== "recolte_fructueuse"),
+);
 
 async function chargerChronologie() {
   const rid = ressourceIdFiltre.value;
@@ -207,11 +232,7 @@ const productionsParRessource = computed(() => {
 
 function ouvrirDetailRessource(rid) {
   if (!rid) return;
-  const q = { ressource: String(rid) };
-  if (isMj.value && mjRaw.mjVueChoix.value) {
-    q.uid = String(mjRaw.mjVueChoix.value);
-  }
-  router.push({ path: "/productions", query: q });
+  router.push({ path: "/productions", query: buildProductionsQuery({ ressource: rid }) });
 }
 
 function ouvrirCreationSelonContexte() {
@@ -247,10 +268,128 @@ const gainForm = reactive({
   balise: "autre",
   mode_production: "fixe",
   actif: true,
-  definitif: true,
-  tours_restants: 6,
+  /** null = illimité (comme tours_restants NULL côté API). */
+  tours_restants: null,
   delai_tours: 0,
 });
+
+/** Affichage du champ « tours restants » : ∞ = illimité (gainForm.tours_restants === null). */
+const toursRestantsInput = ref("∞");
+/** Panneau d’aide « ? » pour la durée (masqué par défaut). */
+const toursRestantsAideOuverte = ref(false);
+
+function syncToursRestantsInputFromForm() {
+  if (gainForm.tours_restants == null) toursRestantsInput.value = "∞";
+  else toursRestantsInput.value = String(gainForm.tours_restants);
+}
+
+/** Minuscules, sans accents, espaces normalisés (pour reconnaître « infini », « l’infini », etc.). */
+function normalizeInfinityText(s) {
+  return String(s)
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/['']/g, "")
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Texte interprété comme « illimité » : vide, symbole ∞, ou formulations proches de infini / synonymes.
+ */
+function textMeansInfinity(raw) {
+  const t = String(raw ?? "").trim();
+  if (t === "") return true;
+  if (t === "∞" || t === "\u221e") return true;
+
+  const n = normalizeInfinityText(t);
+
+  // Codes courts (claviers sans ∞)
+  if (n === "inf" || n === "infinity") return true;
+
+  // Synonymes et expressions usuelles
+  const patterns = [
+    /^infini$/,
+    /^infinie$/,
+    /^infinis$/,
+    /^infinit$/,
+    /^l infini$/,
+    /^linfini$/,
+    /infini/,
+    /infin\b/,
+    /illimit/,
+    /sans limite/,
+    /sans fin/,
+    /pour toujours/,
+    /a vie$/,
+    /etern/,
+    /toujours/,
+    /unlimited/,
+    /unendlich/,
+    /jamais fin/,
+  ];
+  if (patterns.some((re) => re.test(n))) return true;
+
+  // Fautes fréquentes proches de « infini » (distance simple)
+  if (n.length >= 4 && n.length <= 12 && levenshtein1ToInfini(n)) return true;
+
+  return false;
+}
+
+/** True si la chaîne ressemble à « infini » (distance ≤ 2, longueur raisonnable). */
+function levenshtein1ToInfini(s) {
+  const target = "infini";
+  if (s === target) return true;
+  if (s.includes("infini")) return true;
+  if (s.length < 4 || s.length > 9) return false;
+  const a = target;
+  const b = s;
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const dp = Array.from({ length: rows }, () => Array.from({ length: cols }, () => 0));
+  for (let i = 0; i < rows; i++) dp[i][0] = i;
+  for (let j = 0; j < cols; j++) dp[0][j] = j;
+  for (let i = 1; i < rows; i++) {
+    for (let j = 1; j < cols; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[a.length][b.length] <= 2;
+}
+
+/** Interprète le texte : entier > 0 → limité, sinon illimité (affiche ∞). */
+function parseToursRestantsFromInput() {
+  const raw = toursRestantsInput.value;
+  if (textMeansInfinity(raw)) {
+    gainForm.tours_restants = null;
+    syncToursRestantsInputFromForm();
+    return;
+  }
+  const t = raw.trim();
+  const n = Number(t);
+  if (Number.isInteger(n) && n > 0) {
+    gainForm.tours_restants = n;
+    toursRestantsInput.value = String(n);
+    return;
+  }
+  gainForm.tours_restants = null;
+  syncToursRestantsInputFromForm();
+}
+
+function onToursRestantsBlur() {
+  parseToursRestantsFromInput();
+}
+
+function setToursRestantsRapide(n) {
+  gainForm.tours_restants = n;
+  toursRestantsInput.value = String(n);
+}
+
+function setToursRestantsIllimite() {
+  gainForm.tours_restants = null;
+  toursRestantsInput.value = "∞";
+}
 
 function resetGainForm() {
   gainForm.ressource_id = null;
@@ -258,9 +397,9 @@ function resetGainForm() {
   gainForm.balise = "autre";
   gainForm.mode_production = "fixe";
   gainForm.actif = true;
-  gainForm.definitif = true;
-  gainForm.tours_restants = 6;
+  gainForm.tours_restants = null;
   gainForm.delai_tours = 0;
+  syncToursRestantsInputFromForm();
 }
 
 function ouvrirCreation(ressourceId = null, nom = "") {
@@ -277,15 +416,11 @@ function ouvrirCreation(ressourceId = null, nom = "") {
 
 watch(gainFormModal, async (m) => {
   if (m) {
+    toursRestantsAideOuverte.value = false;
     await nextTick();
     gainQteInputRef.value?.select?.();
   }
 });
-
-function selectGainQuantite() {
-  // Sélectionne toute la valeur quand on focus le champ.
-  gainQteInputRef.value?.select?.();
-}
 
 function ouvrirCreationVide() {
   ouvrirCreation();
@@ -298,9 +433,9 @@ function ouvrirEditionGain(g) {
   gainForm.balise = g.balise || "autre";
   gainForm.mode_production = g.mode_production || "fixe";
   gainForm.actif = g.actif;
-  gainForm.definitif = g.definitif;
-  gainForm.tours_restants = g.tours_restants ?? 6;
+  gainForm.tours_restants = g.definitif ? null : g.tours_restants != null ? Number(g.tours_restants) : null;
   gainForm.delai_tours = g.delai_tours ?? 0;
+  syncToursRestantsInputFromForm();
   gainFormModal.value = {
     mode: "edit",
     gain: g,
@@ -317,6 +452,8 @@ async function sauvegarderGainForm(etAjouterAutre = false) {
     erreur.value = "Choisissez une ressource.";
     return;
   }
+  parseToursRestantsFromInput();
+  const illimite = gainForm.tours_restants == null;
   try {
     if (m.mode === "create") {
       await post(`/api/gains-passifs${uidParam}`, {
@@ -325,8 +462,8 @@ async function sauvegarderGainForm(etAjouterAutre = false) {
         balise: gainForm.balise,
         mode_production: gainForm.mode_production,
         actif: gainForm.actif,
-        definitif: gainForm.definitif,
-        tours_restants: gainForm.definitif ? undefined : Number(gainForm.tours_restants),
+        definitif: illimite,
+        tours_restants: illimite ? undefined : Number(gainForm.tours_restants),
         delai_tours: Number(gainForm.delai_tours),
       });
     } else {
@@ -335,20 +472,21 @@ async function sauvegarderGainForm(etAjouterAutre = false) {
         balise: gainForm.balise,
         mode_production: gainForm.mode_production,
         actif: gainForm.actif,
-        definitif: gainForm.definitif,
-        tours_restants: gainForm.definitif ? null : Number(gainForm.tours_restants),
+        definitif: illimite,
+        tours_restants: illimite ? null : Number(gainForm.tours_restants),
         delai_tours: Number(gainForm.delai_tours),
       });
     }
     await charger();
-    if (m.mode === "create") {
+    // Navigation vers la fiche ressource uniquement après « Enregistrer » (pas « & ajouter une autre »).
+    if (m.mode === "create" && !etAjouterAutre) {
       const rid = Number(gainForm.ressource_id);
       if (!Number.isNaN(rid)) {
         const filtre = ressourceIdFiltre.value;
         if (filtre == null || Number(filtre) !== rid) {
           await router.replace({
             path: "/productions",
-            query: { ressource: String(rid) },
+            query: buildProductionsQuery({ ressource: rid }),
           });
         }
       }
@@ -392,6 +530,13 @@ const colonnes = [
   ["duree", "Durée"],
   ["actif", "Actif"],
 ];
+
+const nomRessourceForm = computed(() => {
+  const id = gainForm.ressource_id;
+  if (id == null) return "";
+  const r = ressourcesListe.value.find((x) => Number(x.id) === Number(id));
+  return r?.nom ?? `Ressource #${id}`;
+});
 </script>
 
 <template>
@@ -403,11 +548,13 @@ const colonnes = [
           Gains et pertes passifs par <strong>tour</strong> (mercredi & samedi 00h00). Vous pouvez définir
           <strong>plusieurs règles distinctes</strong> pour la même ressource (ex. +10 et −2 par tour).
         </p>
-        <p v-else class="page-subtitle">
-          Vue filtrée sur une seule ressource : les règles ci‑dessous concernent uniquement
-          <strong>{{ nomRessourceFiltre }}</strong>.
-          <router-link class="inline-link" :to="{ path: '/productions', query: {} }">
-            Afficher toutes les productions
+        <p v-else class="page-subtitle page-subtitle-filtre">
+          <span class="page-subtitle-filtre-text">
+            Vue actuelle : <strong class="page-ressource-courante">{{ nomRessourceFiltre }}</strong>
+            — une seule ressource à la fois.
+          </span>
+          <router-link class="button secondary small productions-back-all" :to="{ path: '/productions', query: productionsQueryAll }">
+            ← Toutes les productions
           </router-link>
         </p>
       </div>
@@ -450,10 +597,8 @@ const colonnes = [
       </div>
     </div>
 
-    <div v-if="ressourceIdFiltre" class="banner-salon">
-      <strong>Une ressource à la fois.</strong>
-      Sur Discord, un salon correspond à une ressource : ne mélangez pas les bilans de production sur le même fil.
-      Ici vous ne voyez que <strong>{{ nomRessourceFiltre }}</strong>.
+    <div v-if="ressourceIdFiltre" class="banner-salon banner-vue-ressource">
+      <div class="banner-vue-ressource-title">Production — {{ nomRessourceFiltre }}</div>
     </div>
 
     <ProductionChronologieChart
@@ -498,7 +643,7 @@ const colonnes = [
                         {{ libelleBalise(g.balise || 'autre') }}
                       </span>
                       <span class="prix effet-cell">{{ formatEffetProduction(g) }}</span>
-                      <span v-if="g.definitif" class="tag tag-durable">Définitif</span>
+                      <span v-if="g.definitif" class="tag tag-durable">Sans limite</span>
                       <span v-else class="tag tag-temp">{{ g.tours_restants }} tour(s) restant(s)</span>
                       <span v-if="(g.delai_tours ?? 0) > 0" class="muted">
                         Démarre dans {{ g.delai_tours }} tour(s)
@@ -535,7 +680,7 @@ const colonnes = [
       <div v-if="gainsFiltres.length === 0" class="productions-empty">
         Aucune règle de production pour « {{ nomRessourceFiltre }} ». Utilisez « Nouvelle production » en choisissant
         cette ressource, ou revenez à
-        <router-link class="inline-link" :to="{ path: '/productions', query: {} }">toutes les productions</router-link>.
+        <router-link class="inline-link" :to="{ path: '/productions', query: productionsQueryAll }">toutes les productions</router-link>.
       </div>
 
       <div v-else class="table-wrap">
@@ -563,7 +708,7 @@ const colonnes = [
               </td>
               <td class="prix effet-cell">{{ formatEffetProduction(g) }}</td>
               <td>
-                <span v-if="g.definitif" class="tag tag-durable">Définitif</span>
+                <span v-if="g.definitif" class="tag tag-durable">Sans limite</span>
                 <span v-else class="tag tag-temp">{{ g.tours_restants }} tour(s) restant(s)</span>
                 <span v-if="(g.delai_tours ?? 0) > 0" class="muted">
                   Démarre dans {{ g.delai_tours }} tour(s)
@@ -593,25 +738,30 @@ const colonnes = [
     </div>
 
     <!-- Modal -->
-    <div v-if="gainFormModal" class="modal-overlay" @click.self="gainFormModal = null">
-      <div class="modal modal-sm">
+    <div v-if="gainFormModal" class="modal-overlay modal-overlay-gain" @click.self="gainFormModal = null">
+      <div class="modal modal-sm modal-gain-form">
         <h3 class="modal-title">
           {{
             gainFormModal.mode === "create" ? "Nouvelle production" : "Modifier la production"
           }}
-          <span v-if="gainFormModal.nomHint"> — {{ gainFormModal.nomHint }}</span>
         </h3>
-        <p class="modal-hint">
-          Une ligne = une règle indépendante. En mode <strong>pourcentage</strong>, la valeur s’applique au stock
-          <strong>avant cette ligne</strong> (plusieurs règles : ordre des identifiants).
+        <div v-if="gainForm.ressource_id" class="modal-resource-banner">
+          <span class="modal-resource-banner-label">Ressource</span>
+          <span class="modal-resource-banner-nom">{{ nomRessourceForm }}</span>
+        </div>
+        <p v-else-if="gainFormModal.mode === 'create'" class="modal-resource-missing">
+          Choisissez une ressource ci-dessous pour cette règle.
         </p>
-        <label
-          v-if="gainFormModal.mode === 'create' && !gainForm.ressource_id"
-          class="form-label"
-        >
+        <p class="modal-hint">
+          Une ligne = une règle indépendante. En mode <strong>pourcentage</strong>, la valeur s’applique à la
+          <strong>production cumulée du tour</strong> après les règles précédentes (ordre des identifiants), pas au
+          stock total. Les parties fractionnaires (ex. 50&nbsp;% de 3 = 1,5) sont tronquées pour l’aperçu ; au tour
+          réel, un <strong>tirage</strong> décide du +1 restant, enregistré comme « Récolte fructueuse ».
+        </p>
+        <label v-if="gainFormModal.mode === 'create'" class="form-label">
           Ressource
           <select v-model.number="gainForm.ressource_id" class="select full-width">
-            <option :value="null" disabled>Choisir…</option>
+            <option :value="null" disabled>Choisir une ressource…</option>
             <option v-for="r in ressourcesListe" :key="r.id" :value="r.id">
               {{ r.nom }} ({{ r.type }})
             </option>
@@ -620,8 +770,8 @@ const colonnes = [
         <label class="form-label">
           Justification (balise)
           <select v-model="gainForm.balise" class="select full-width">
-            <option v-if="balisesDisponibles.length === 0" value="autre">Chargement…</option>
-            <option v-for="b in balisesDisponibles" :key="b.id" :value="b.id">
+            <option v-if="balisesFormulaireProduction.length === 0" value="autre">Chargement…</option>
+            <option v-for="b in balisesFormulaireProduction" :key="b.id" :value="b.id">
               {{ b.label }}
             </option>
           </select>
@@ -634,7 +784,7 @@ const colonnes = [
           </label>
           <label class="radio-label">
             <input v-model="gainForm.mode_production" type="radio" value="pourcentage" />
-            % du stock actuel
+            % de la production du tour (après les règles précédentes)
           </label>
         </div>
         <label class="form-label">
@@ -648,12 +798,9 @@ const colonnes = [
             v-model.number="gainForm.quantite_par_tour"
             type="number"
             class="input"
-            @focus="selectGainQuantite"
+            @focus="selectAllInputText"
+            @click="selectAllInputText"
           />
-        </label>
-        <label class="form-label checkbox-label">
-          <input v-model="gainForm.definitif" type="checkbox" />
-          Définitif (sans limite de tours)
         </label>
         <label class="form-label">
           Démarre dans
@@ -662,6 +809,8 @@ const colonnes = [
             type="number"
             min="0"
             class="input"
+            @focus="selectAllInputText"
+            @click="selectAllInputText"
           />
           tour(s)
         </label>
@@ -688,15 +837,62 @@ const colonnes = [
             2 tours
           </button>
         </div>
-        <label v-if="!gainForm.definitif" class="form-label">
+        <label class="form-label">
           Nombre de tours restants
-          <input v-model.number="gainForm.tours_restants" type="number" min="1" class="input" />
+          <div class="tours-input-row">
+            <input
+              v-model="toursRestantsInput"
+              type="text"
+              inputmode="numeric"
+              class="input input-tours-restants"
+              autocomplete="off"
+              spellcheck="false"
+              :aria-describedby="toursRestantsAideOuverte ? 'hint-tours-restants' : undefined"
+              title="Illimité : vide, ∞, infini, illimité… — Limité : un entier positif (ex. 6)"
+              @blur="onToursRestantsBlur"
+              @focus="selectAllInputText"
+              @click="selectAllInputText"
+            />
+            <button
+              type="button"
+              class="tours-help-btn"
+              :aria-expanded="toursRestantsAideOuverte"
+              aria-controls="hint-tours-restants"
+              title="Aide : durée illimitée ou limitée"
+              @click="toursRestantsAideOuverte = !toursRestantsAideOuverte"
+            >
+              ?
+            </button>
+          </div>
+          <div
+            v-show="toursRestantsAideOuverte"
+            id="hint-tours-restants"
+            class="tours-player-info"
+            role="region"
+            aria-label="Aide sur le nombre de tours restants"
+          >
+            <div class="tours-player-info-title">Comment indiquer une durée ?</div>
+            <ul class="tours-player-info-list">
+              <li>
+                <strong>Durée illimitée</strong> (défaut) : laissez le champ vide après modification, le symbole
+                <strong>∞</strong> réapparaît, ou utilisez le bouton « Sans limite ». Vous pouvez aussi écrire
+                <em>infini</em>, <em>illimité</em>, <em>sans limite</em>… (pas besoin du clavier ∞).
+              </li>
+              <li>
+                <strong>Durée limitée</strong> : saisissez un <strong>nombre entier strictement positif</strong>
+                (ex. <strong>6</strong> pour 6 tours). Autre texte ou valeur invalide → retour à l’illimité.
+              </li>
+            </ul>
+          </div>
         </label>
-        <div v-if="!gainForm.definitif" class="temp-quick-actions">
-          <button type="button" class="button secondary small" @click="gainForm.tours_restants = 1">
+        <div class="temp-quick-actions">
+          <button type="button" class="button secondary small" @click="setToursRestantsIllimite">
+            Sans limite (∞)
+          </button>
+          <button type="button" class="button secondary small" @click="setToursRestantsRapide(1)">
             1 tour
           </button>
-          <button type="button" class="button secondary small" @click="gainForm.tours_restants = 2">
+          <button type="button" class="button secondary small" @click="setToursRestantsRapide(2)">
             2 tours
           </button>
         </div>
@@ -747,6 +943,139 @@ const colonnes = [
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+.page-subtitle-filtre {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+.page-subtitle-filtre-text {
+  flex: 1;
+  min-width: 200px;
+}
+.page-ressource-courante {
+  color: #7dd3fc;
+}
+.productions-back-all {
+  flex-shrink: 0;
+  text-decoration: none;
+}
+.banner-vue-ressource {
+  border-color: #0ea5e9;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(15, 23, 42, 0.95));
+  box-shadow: 0 0 0 1px rgba(14, 165, 233, 0.25);
+}
+.banner-vue-ressource-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #e0f2fe;
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+.modal-overlay-gain {
+  z-index: 4000;
+}
+.modal-gain-form {
+  max-height: min(92vh, 880px);
+  overflow-y: auto;
+}
+.modal-resource-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.1);
+}
+.modal-resource-banner-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #7dd3fc;
+}
+.modal-resource-banner-nom {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #f0f9ff;
+}
+.modal-resource-missing {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: #fcd34d;
+  background: rgba(180, 83, 9, 0.15);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 8px;
+}
+.tours-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.tours-input-row .input-tours-restants {
+  flex: 1;
+  min-width: 0;
+}
+.tours-help-btn {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid #475569;
+  background: #1e293b;
+  color: #94a3b8;
+  font-weight: 700;
+  font-size: 15px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tours-help-btn:hover,
+.tours-help-btn[aria-expanded="true"] {
+  border-color: #38bdf8;
+  color: #e2e8f0;
+  background: #0f172a;
+}
+.tours-player-info {
+  margin: 10px 0 8px;
+  padding: 10px 12px 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #cbd5e1;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-left: 4px solid #38bdf8;
+  border-radius: 8px;
+  max-width: 100%;
+}
+.tours-player-info-title {
+  font-weight: 700;
+  font-size: 13px;
+  color: #e2e8f0;
+  margin-bottom: 8px;
+}
+.tours-player-info-list {
+  margin: 0;
+  padding-left: 1.15em;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tours-player-info-list li {
+  margin: 0;
+}
+.input-tours-restants {
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+}
 .mode-row {
   display: flex;
   flex-direction: column;
@@ -787,6 +1116,10 @@ const colonnes = [
 .tag-balise-autre {
   background: #334155;
   color: #cbd5e1;
+}
+.tag-balise-recolte_fructueuse {
+  background: #14532d;
+  color: #bbf7d0;
 }
 .effet-cell {
   white-space: nowrap;
@@ -892,8 +1225,10 @@ details[open] .details-summary::after {
 }
 
 .productions-header-item.active {
-  border-color: rgba(147, 197, 253, 0.35);
-  background: rgba(147, 197, 253, 0.08);
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.16);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
+  color: #f0f9ff;
 }
 
 .productions-header-nom {

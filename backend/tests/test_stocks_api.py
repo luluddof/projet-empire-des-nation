@@ -5,6 +5,16 @@ from app.models import GainPassif, Stock, Transaction, Utilisateur
 from datetime import UTC, datetime, timedelta
 
 
+def _set_stock(uid: str, rid: int, quantite: int) -> None:
+    s = Stock.query.filter_by(utilisateur_id=uid, ressource_id=rid).first()
+    if s is None:
+        s = Stock(utilisateur_id=uid, ressource_id=rid, quantite=int(quantite))
+        db.session.add(s)
+    else:
+        s.quantite = int(quantite)
+    db.session.commit()
+
+
 def test_stocks_401_sans_session(client):
     assert client.get("/api/stocks").status_code == 401
 
@@ -19,29 +29,18 @@ def test_stocks_liste_joueur(client_joueur, ids_ressources):
     assert ids_ressources["acier"] in ids
 
 
-def test_stocks_ajustement_manuel(client_joueur, ids_ressources):
+def test_stocks_ajustement_manuel_refuse_pour_joueur(client_joueur, ids_ressources):
     rid = ids_ressources["acier"]
     r = client_joueur.put(
         f"/api/stocks/{rid}",
         json={"quantite": 42, "motif": "test"},
     )
-    assert r.status_code == 200
-    body = r.get_json()
-    assert body["quantite"] == 42
-
-    tr = (
-        Transaction.query.filter_by(utilisateur_id="100", ressource_id=rid)
-        .order_by(Transaction.id.desc())
-        .first()
-    )
-    assert tr is not None
-    assert tr.motif == "test"
+    assert r.status_code == 403
 
 
 def test_commerce_achat(client_joueur, ids_ressources):
     fid, aid = ids_ressources["florins"], ids_ressources["acier"]
-    r = client_joueur.put(f"/api/stocks/{fid}", json={"quantite": 50_000_000})
-    assert r.status_code == 200
+    _set_stock("100", fid, 50_000_000)
 
     r = client_joueur.post(
         "/api/stocks/commerce",
@@ -55,8 +54,7 @@ def test_commerce_achat(client_joueur, ids_ressources):
 
 def test_commerce_achat_lointain(client_joueur, ids_ressources):
     fid, aid = ids_ressources["florins"], ids_ressources["acier"]
-    r = client_joueur.put(f"/api/stocks/{fid}", json={"quantite": 100_000_000})
-    assert r.status_code == 200
+    _set_stock("100", fid, 100_000_000)
 
     r = client_joueur.post(
         "/api/stocks/commerce",
@@ -75,8 +73,7 @@ def test_commerce_achat_lointain(client_joueur, ids_ressources):
 
 def test_commerce_achat_mode_invalide(client_joueur, ids_ressources):
     fid, aid = ids_ressources["florins"], ids_ressources["acier"]
-    r = client_joueur.put(f"/api/stocks/{fid}", json={"quantite": 100_000_000})
-    assert r.status_code == 200
+    _set_stock("100", fid, 100_000_000)
 
     r = client_joueur.post(
         "/api/stocks/commerce",
@@ -103,8 +100,8 @@ def test_commerce_vente_insuffisant(client_joueur, ids_ressources):
 
 def test_gains_passifs_crud_et_chronologie(client_joueur, ids_ressources, app):
     rid = ids_ressources["acier"]
-    r = client_joueur.put(f"/api/stocks/{rid}", json={"quantite": 1000})
-    assert r.status_code == 200
+    with app.app_context():
+        _set_stock("100", rid, 1000)
 
     r = client_joueur.post(
         "/api/gains-passifs",
@@ -258,6 +255,20 @@ def test_mj_peut_stocks_et_gains_passifs_autre(client_mj, app, ids_ressources):
 
     r = client_mj.delete(f"/api/gains-passifs/{gid}?uid=101")
     assert r.status_code == 200
+
+
+def test_mj_peut_ajuster_stock_autre_user(client_mj, app, ids_ressources):
+    with app.app_context():
+        db.session.add(Utilisateur(id="101", username="Cible", is_mj=False))
+        db.session.commit()
+
+    rid = ids_ressources["acier"]
+    r = client_mj.put(
+        f"/api/stocks/{rid}?uid=101",
+        json={"quantite": 42, "motif": "test_mj"},
+    )
+    assert r.status_code == 200
+    assert r.get_json()["quantite"] == 42
 
 
 def test_scheduler_applique_gain_fixe(app, ids_ressources):
