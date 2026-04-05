@@ -277,6 +277,17 @@ const gainForm = reactive({
 const toursRestantsInput = ref("∞");
 /** Panneau d’aide « ? » pour la durée (masqué par défaut). */
 const toursRestantsAideOuverte = ref(false);
+/** Panneau d’aide « ? » pour le mode pourcentage (masqué par défaut). */
+const pourcentageAideOuverte = ref(false);
+
+/** Création depuis la fiche graphe (ressource dans l’URL) : pas de changement de ressource dans la modale. */
+const ressourceVerrouilleeEnCreation = computed(
+  () =>
+    gainFormModal.value?.mode === "create" &&
+    ressourceIdFiltre.value != null &&
+    gainForm.ressource_id != null &&
+    Number(gainForm.ressource_id) === Number(ressourceIdFiltre.value),
+);
 
 function syncToursRestantsInputFromForm() {
   if (gainForm.tours_restants == null) toursRestantsInput.value = "∞";
@@ -417,10 +428,18 @@ function ouvrirCreation(ressourceId = null, nom = "") {
 watch(gainFormModal, async (m) => {
   if (m) {
     toursRestantsAideOuverte.value = false;
+    pourcentageAideOuverte.value = false;
     await nextTick();
     gainQteInputRef.value?.select?.();
   }
 });
+
+watch(
+  () => gainForm.mode_production,
+  (mode) => {
+    if (mode !== "pourcentage") pourcentageAideOuverte.value = false;
+  },
+);
 
 function ouvrirCreationVide() {
   ouvrirCreation();
@@ -749,16 +768,13 @@ const nomRessourceForm = computed(() => {
           <span class="modal-resource-banner-label">Ressource</span>
           <span class="modal-resource-banner-nom">{{ nomRessourceForm }}</span>
         </div>
-        <p v-else-if="gainFormModal.mode === 'create'" class="modal-resource-missing">
+        <p v-else-if="gainFormModal.mode === 'create' && !ressourceVerrouilleeEnCreation" class="modal-resource-missing">
           Choisissez une ressource ci-dessous pour cette règle.
         </p>
-        <p class="modal-hint">
-          Une ligne = une règle indépendante. En mode <strong>pourcentage</strong>, la valeur s’applique à la
-          <strong>production cumulée du tour</strong> après les règles précédentes (ordre des identifiants), pas au
-          stock total. Les parties fractionnaires (ex. 50&nbsp;% de 3 = 1,5) sont tronquées pour l’aperçu ; au tour
-          réel, un <strong>tirage</strong> décide du +1 restant, enregistré comme « Récolte fructueuse ».
-        </p>
-        <label v-if="gainFormModal.mode === 'create'" class="form-label">
+        <label
+          v-if="gainFormModal.mode === 'create' && !ressourceVerrouilleeEnCreation"
+          class="form-label"
+        >
           Ressource
           <select v-model.number="gainForm.ressource_id" class="select full-width">
             <option :value="null" disabled>Choisir une ressource…</option>
@@ -782,10 +798,37 @@ const nomRessourceForm = computed(() => {
             <input v-model="gainForm.mode_production" type="radio" value="fixe" />
             unités fixes (par tour)
           </label>
-          <label class="radio-label">
-            <input v-model="gainForm.mode_production" type="radio" value="pourcentage" />
-            % de la production du tour (après les règles précédentes)
-          </label>
+          <div class="mode-pct-line">
+            <label class="radio-label mode-pct-label">
+              <input v-model="gainForm.mode_production" type="radio" value="pourcentage" />
+              <span>% de la production du tour (après les règles précédentes)</span>
+            </label>
+            <button
+              type="button"
+              class="tours-help-btn mode-pct-help"
+              :aria-expanded="pourcentageAideOuverte"
+              aria-controls="hint-mode-pourcentage"
+              title="Aide : mode pourcentage"
+              @click="pourcentageAideOuverte = !pourcentageAideOuverte"
+            >
+              ?
+            </button>
+          </div>
+        </div>
+        <div
+          v-show="pourcentageAideOuverte"
+          id="hint-mode-pourcentage"
+          class="tours-player-info mode-pct-hint"
+          role="region"
+          aria-label="Aide sur le mode pourcentage"
+        >
+          <p class="mode-pct-hint-text">
+            Une ligne = une règle indépendante. En mode <strong>pourcentage</strong>, la valeur s’applique à la
+            <strong>production cumulée du tour</strong> après les règles précédentes (ordre des identifiants), pas au
+            <strong>stock total</strong>. Les parties fractionnaires (ex. 50&nbsp;% de 3 = 1,5) sont tronquées pour
+            l’aperçu ; au tour réel, un <strong>tirage</strong> décide du +1 restant, enregistré comme « Récolte
+            fructueuse ».
+          </p>
         </div>
         <label class="form-label">
           {{
@@ -1081,6 +1124,30 @@ const nomRessourceForm = computed(() => {
   flex-direction: column;
   gap: 8px;
   margin-bottom: 12px;
+}
+.mode-pct-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mode-pct-label {
+  flex: 1;
+  min-width: 0;
+}
+.mode-pct-help {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.mode-pct-hint {
+  margin-top: -4px;
+  margin-bottom: 12px;
+}
+.mode-pct-hint-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #cbd5e1;
 }
 .radio-label {
   display: flex;

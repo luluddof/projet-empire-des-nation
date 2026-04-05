@@ -12,6 +12,7 @@ import {
   useApi,
 } from "../composables/useApi.js";
 import { deltaNetProchainTour } from "../utils/gainPassif.js";
+import { playCashSound } from "../utils/playCashSound.js";
 
 const props = defineProps({
   authState: { type: Object, required: true },
@@ -141,10 +142,13 @@ async function sauvegarderTout() {
     isMj.value && mjRaw.mjVueChoix.value
       ? `?uid=${encodeURIComponent(String(mjRaw.mjVueChoix.value))}`
       : "";
-  const promesses = Object.entries(modifEnCours.value)
-    .filter(([, v]) => v !== "")
-    .map(([rid, qte]) =>
-      put(`/api/stocks/${rid}${uidParam}`, { quantite: Number(qte), motif: "ajustement_manuel" })
+  const promesses = stocks.value
+    .filter((s) => hasModif(s))
+    .map((s) =>
+      put(`/api/stocks/${s.ressource_id}${uidParam}`, {
+        quantite: Number(modifEnCours.value[s.ressource_id]),
+        motif: "ajustement_manuel",
+      })
     );
   try {
     await Promise.all(promesses);
@@ -162,9 +166,7 @@ function texteProchainTour(stock) {
   return (n > 0 ? "+" : "") + String(n);
 }
 
-const nbModifications = computed(
-  () => Object.values(modifEnCours.value).filter((v) => v !== "").length
-);
+const nbModifications = computed(() => stocks.value.filter((s) => hasModif(s)).length);
 
 const sort = reactive({ key: "nom", dir: "asc" });
 
@@ -186,7 +188,7 @@ function gainTourPourTri(stock) {
 const stocksTries = computed(() => {
   const key = sort.key;
   const dir = sort.dir === "asc" ? 1 : -1;
-  const sorted = [...stocksFiltres.value].sort((a, b) => {
+  const sorted = [...stocksFiltresRecherche.value].sort((a, b) => {
     let va;
     let vb;
     switch (key) {
@@ -237,21 +239,12 @@ const stockFlorins = computed(() =>
 );
 
 /**
- * Vue réduite : monnaie toujours visible ; sinon stock > 0, règle(s) de gain passif,
- * production nette au prochain tour, ou solde florins suffisant pour au moins 1 unité au prix d’achat local.
+ * Vue réduite : monnaie toujours affichée ; autres ressources uniquement si quantité en stock > 0
+ * (pas les lignes « achetables » sans possession).
  */
 function ressourceVisibleDansVueStocks(stock) {
   if (stock.ressource.nom === FLORINS_NOM) return true;
-  const q = qteAffichee(stock);
-  if (q > 0) return true;
-  const rid = stock.ressource_id;
-  const gainsList = gainsParRid.value[rid] || [];
-  if (gainsList.length > 0) return true;
-  if (gainTourPourTri(stock) !== 0) return true;
-  const florinsQ = stockFlorins.value ? qteAffichee(stockFlorins.value) : 0;
-  const pa = Number(stock.ressource.prix_achat) || 0;
-  if (pa <= 0) return true;
-  return florinsQ >= pa;
+  return qteAffichee(stock) > 0;
 }
 
 const stocksFiltres = computed(() => {
@@ -261,6 +254,26 @@ const stocksFiltres = computed(() => {
 
 const nbStocksTotal = computed(() => stocks.value.length);
 const nbStocksFiltres = computed(() => stocksFiltres.value.length);
+
+const rechercheStocks = ref("");
+
+function texteRechercheNormalise() {
+  return String(rechercheStocks.value ?? "").trim().toLowerCase();
+}
+
+const stocksFiltresRecherche = computed(() => {
+  const q = texteRechercheNormalise();
+  if (!q) return stocksFiltres.value;
+  return stocksFiltres.value.filter((s) => {
+    const nom = (s.ressource.nom || "").toLowerCase();
+    const type = (s.ressource.type || "").toLowerCase();
+    return nom.includes(q) || type.includes(q);
+  });
+});
+
+const nbStocksRecherche = computed(() => stocksFiltresRecherche.value.length);
+
+const aUneRechercheStock = computed(() => texteRechercheNormalise().length > 0);
 
 // --- Commerce (ressources ↔ florins) ---
 const commerceModal = ref(null);
@@ -293,6 +306,10 @@ const commerceTotal = computed(() => {
 
 async function executerCommerce() {
   if (!commerceModal.value) return;
+  if (isMjOtherView.value) {
+    commerceErr.value = "Achat / vente indisponible pour un autre joueur : utilisez la colonne des quantités et Sauvegarder.";
+    return;
+  }
   commerceErr.value = "";
   const q = Math.floor(Number(commerceQte.value) || 0);
   if (q <= 0) {
@@ -314,6 +331,7 @@ async function executerCommerce() {
       payload.achat_mode = commerceAchatMode.value;
     }
     await post(`/api/stocks/commerce${uidParam}`, payload);
+    playCashSound();
     commerceModal.value = null;
     await chargerStocks();
   } catch (e) {
@@ -325,6 +343,13 @@ async function executerCommerce() {
 
 function estFlorins(stock) {
   return stock.ressource.nom === FLORINS_NOM;
+}
+
+/** MJ sur les stocks d’un autre joueur : pas de commerce, ajustement manuel (+/− ou saisie). */
+function ajusterQuantiteMj(stock, delta) {
+  const cur = Number(qteAffichee(stock)) || 0;
+  const next = Math.max(0, cur + delta);
+  setModif(stock.ressource_id, String(next));
 }
 
 watch(commerceModal, async (m) => {
@@ -382,7 +407,12 @@ function sortLabel(k) {
       <div>
         <h2 class="page-title">Gestion des Stocks</h2>
         <p class="page-subtitle">
-          <template v-if="isMj">Modifiez les quantités puis sauvegardez.</template>
+          <template v-if="isMj && isMjOtherView">
+            Vue stocks de <strong>{{ mj.mjVueLabel }}</strong> : l’achat et la vente automatiques sont désactivés.
+            Utilisez la colonne « Nouvelle quantité » (saisie ou boutons +/−) puis
+            <strong>Sauvegarder</strong> pour ajouter ou retirer des unités (y compris les florins).
+          </template>
+          <template v-else-if="isMj">Modifiez les quantités puis sauvegardez, ou utilisez Acheter / Vendre.</template>
           <template v-else>Consultez vos stocks et effectuez des achats/ventes.</template>
           <span
             v-if="stockFlorins"
@@ -425,18 +455,63 @@ function sortLabel(k) {
     <p v-if="erreur" class="error">{{ erreur }}</p>
 
     <div class="stocks-toolbar">
-      <label class="stocks-toggle-all">
-        <input v-model="voirToutesLesRessources" type="checkbox" />
-        <span>Afficher toutes les ressources du catalogue</span>
-      </label>
-      <p v-if="!voirToutesLesRessources" class="stocks-filter-meta">
-        {{ nbStocksFiltres }} / {{ nbStocksTotal }} ressources visibles (possédées, achetables au moins une fois au
-        prix local, ou avec production / gain passif).
+      <div class="stocks-toolbar-row stocks-mode-row" role="group" aria-label="Mode d'affichage des stocks">
+        <span class="stocks-mode-label" :class="{ 'is-active': !voirToutesLesRessources }">Mes stocks</span>
+        <button
+          type="button"
+          class="stocks-switch"
+          role="switch"
+          :aria-checked="voirToutesLesRessources"
+          :aria-label="
+            voirToutesLesRessources
+              ? 'Afficher tout le catalogue : activé'
+              : 'Afficher uniquement les ressources possédées'
+          "
+          @click="voirToutesLesRessources = !voirToutesLesRessources"
+        >
+          <span class="stocks-switch-track" :class="{ 'is-on': voirToutesLesRessources }">
+            <span class="stocks-switch-thumb" />
+          </span>
+        </button>
+        <span class="stocks-mode-label" :class="{ 'is-active': voirToutesLesRessources }">Tout le catalogue</span>
+      </div>
+      <div class="stocks-toolbar-row">
+        <label class="stocks-search-label">
+          <span class="stocks-search-title">Rechercher une ressource</span>
+          <input
+            v-model.trim="rechercheStocks"
+            type="search"
+            class="input stocks-search-input"
+            placeholder="Nom ou type…"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </label>
+      </div>
+      <p class="stocks-filter-meta">
+        <template v-if="aUneRechercheStock">
+          {{ nbStocksRecherche }} résultat{{ nbStocksRecherche !== 1 ? "s" : "" }} sur {{ nbStocksFiltres }}
+          ressource{{ nbStocksFiltres !== 1 ? "s" : "" }} affichée{{ nbStocksFiltres !== 1 ? "s" : "" }}.
+        </template>
+        <template v-else-if="voirToutesLesRessources">
+          Catalogue complet : {{ nbStocksFiltres }} ressources.
+        </template>
+        <template v-else>
+          {{ nbStocksFiltres }} ressource{{ nbStocksFiltres !== 1 ? "s" : "" }} en possession sur
+          {{ nbStocksTotal }} au catalogue (activez « Tout le catalogue » pour tout voir).
+        </template>
       </p>
     </div>
 
+    <p
+      v-if="aUneRechercheStock && nbStocksRecherche === 0 && stocksFiltres.length > 0"
+      class="stocks-empty-search"
+    >
+      Aucune ressource ne correspond à « {{ rechercheStocks }} ».
+    </p>
+
     <div class="table-wrap">
-      <table class="data-table">
+      <table v-show="nbStocksRecherche > 0" class="data-table">
         <thead>
           <tr>
             <th
@@ -465,14 +540,21 @@ function sortLabel(k) {
               {{ affichageStockQuantite(s) }}
             </td>
             <td v-if="isMj">
-              <input
-                type="number"
-                class="input-qty"
-                :value="getModif(s.ressource_id)"
-                :placeholder="s.quantite"
-                min="0"
-                @input="setModif(s.ressource_id, $event.target.value)"
-              />
+              <div class="mj-qty-cell">
+                <input
+                  type="number"
+                  class="input-qty"
+                  :value="getModif(s.ressource_id)"
+                  :placeholder="s.quantite"
+                  min="0"
+                  step="any"
+                  @input="setModif(s.ressource_id, $event.target.value)"
+                />
+                <div v-if="isMjOtherView" class="mj-qty-delta" :title="'Ajouter ou retirer une unité (puis Sauvegarder)'">
+                  <button type="button" class="button secondary tiny" @click="ajusterQuantiteMj(s, -1)">−</button>
+                  <button type="button" class="button secondary tiny" @click="ajusterQuantiteMj(s, 1)">+</button>
+                </div>
+              </div>
             </td>
             <td class="gain-cell">
               <span
@@ -607,7 +689,7 @@ function sortLabel(k) {
           </button>
           <button
             class="button"
-            :disabled="commerceLoading"
+            :disabled="commerceLoading || isMjOtherView"
             @click="executerCommerce"
           >
             {{ commerceLoading ? "…" : "Confirmer" }}
@@ -623,34 +705,138 @@ function sortLabel(k) {
 .stocks-toolbar {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 14px;
   margin-bottom: 14px;
-  padding: 12px 14px;
+  padding: 14px 16px;
   background: #0f172a;
   border: 1px solid #334155;
   border-radius: 10px;
   max-width: 100%;
 }
 
-.stocks-toggle-all {
-  display: inline-flex;
-  align-items: flex-start;
+.stocks-toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
-  cursor: pointer;
-  font-size: 14px;
+}
+
+.stocks-mode-row {
+  gap: 14px;
+  padding: 4px 0;
+}
+
+.stocks-mode-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: #64748b;
+  transition: color 0.15s ease;
+  user-select: none;
+}
+
+.stocks-mode-label.is-active {
   color: #e2e8f0;
+}
+
+.stocks-switch {
+  border: none;
+  background: transparent;
+  padding: 6px 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+  border-radius: 8px;
+}
+
+.stocks-switch:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 3px;
+}
+
+.stocks-switch-track {
+  display: block;
+  width: 56px;
+  height: 30px;
+  border-radius: 999px;
+  background: #334155;
+  position: relative;
+  transition: background 0.2s ease;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.stocks-switch-track.is-on {
+  background: #0284c7;
+}
+
+.stocks-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #f8fafc;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  transition: transform 0.2s ease;
+}
+
+.stocks-switch-track.is-on .stocks-switch-thumb {
+  transform: translateX(26px);
+}
+
+.stocks-search-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 420px;
   margin: 0;
 }
 
-.stocks-toggle-all input {
-  margin-top: 3px;
-  flex-shrink: 0;
+.stocks-search-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.stocks-search-input {
+  width: 100%;
+  min-height: 42px;
+  font-size: 15px;
 }
 
 .stocks-filter-meta {
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
   color: #94a3b8;
-  line-height: 1.45;
+  line-height: 1.5;
+}
+
+.stocks-empty-search {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  color: #fcd34d;
+  font-size: 14px;
+}
+
+.mj-qty-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.mj-qty-delta {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.button.tiny {
+  min-width: 2rem;
+  padding: 2px 8px;
+  font-size: 14px;
+  line-height: 1.2;
 }
 </style>
