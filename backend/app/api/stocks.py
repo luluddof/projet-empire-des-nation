@@ -450,6 +450,9 @@ def update_gain_passif(gain_id):
     gain = GainPassif.query.filter_by(id=gain_id, utilisateur_id=cible_uid).first()
     if not gain:
         return jsonify({"error": "Gain passif introuvable"}), 404
+    # Empêche un joueur de modifier une ligne issue d'un évènement MJ.
+    if getattr(gain, "evenement_id", None) is not None and not me.is_mj:
+        return jsonify({"error": "Cette production provient d'un évènement et ne peut pas être modifiée"}), 403
 
     data = request.get_json() or {}
     if "quantite_par_tour" in data:
@@ -503,6 +506,8 @@ def delete_gain_passif(gain_id):
     gain = GainPassif.query.filter_by(id=gain_id, utilisateur_id=cible_uid).first()
     if not gain:
         return jsonify({"error": "Gain passif introuvable"}), 404
+    if getattr(gain, "evenement_id", None) is not None and not me.is_mj:
+        return jsonify({"error": "Cette production provient d'un évènement et ne peut pas être supprimée"}), 403
     db.session.delete(gain)
     db.session.commit()
     return jsonify({"ok": True})

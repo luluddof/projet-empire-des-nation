@@ -22,6 +22,9 @@ const avatarUrl = computed(() => {
     </div>
 
     <div class="navbar-links">
+      <router-link to="/dashboard" :class="{ active: route.path === '/dashboard' }">
+        Tableau de bord
+      </router-link>
       <router-link to="/ressources" :class="{ active: route.path === '/ressources' }">
         Ressources
       </router-link>
@@ -40,6 +43,13 @@ const avatarUrl = computed(() => {
         :class="{ active: route.path === '/mj/joueurs' }"
       >
         Joueurs (MJ)
+      </router-link>
+      <router-link
+        v-if="user?.is_mj"
+        to="/mj/evenements"
+        :class="{ active: route.path === '/mj/evenements' }"
+      >
+        Évènements (MJ)
       </router-link>
     </div>
 

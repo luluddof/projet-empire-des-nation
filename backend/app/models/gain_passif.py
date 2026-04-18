@@ -23,6 +23,8 @@ class GainPassif(db.Model):
     # delai_tours : nombre de tours avant le démarrage effectif de la production
     # (ex : une "scierie" qui produit dans 2 tours => delai_tours=2).
     delai_tours = db.Column(db.Integer, nullable=False, default=0)
+    # Optionnel : ligne créée par un évènement MJ (non éditable par un joueur)
+    evenement_id = db.Column(db.Integer, db.ForeignKey("evenement.id"), nullable=True, index=True)
     # science | politique | evenement | batiment | autre
     balise = db.Column(db.String(20), nullable=False, default="autre")
     # fixe = unités ; pourcentage = % de la production cumulée du tour avant cette ligne (ordre id)
@@ -41,6 +43,7 @@ class GainPassif(db.Model):
             "definitif": self.tours_restants is None,
             "tours_restants": self.tours_restants,
             "delai_tours": self.delai_tours,
+            "evenement_id": getattr(self, "evenement_id", None),
             "balise": getattr(self, "balise", None) or "autre",
             "mode_production": getattr(self, "mode_production", None) or "fixe",
         }

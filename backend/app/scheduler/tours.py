@@ -5,11 +5,39 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from ..extensions import db
-from ..models import GainPassif, Stock, Transaction
+from ..models import Evenement, EvenementJoueur, GainPassif, Stock, Transaction
 from ..utils.gain_passif import delta_ligne, normaliser_mode, tirage_pourcentage_sur_production_tour
 from ..utils.prix import prix_achat_pour_utilisateur
 
 logger = logging.getLogger(__name__)
+
+
+def _avancer_evenements_joueurs(app):
+    """Décrémente délai / durée des évènements par joueur ; retire les effets à expiration."""
+    with app.app_context():
+        ejs = (
+            EvenementJoueur.query.join(Evenement)
+            .filter(
+                Evenement.brouillon.is_(False),
+                Evenement.actif.is_(True),
+                EvenementJoueur.actif.is_(True),
+            )
+            .all()
+        )
+        for ej in ejs:
+            if int(ej.delai_tours or 0) > 0:
+                ej.delai_tours = int(ej.delai_tours) - 1
+            elif ej.tours_restants is not None and int(ej.tours_restants) > 0:
+                ej.tours_restants = int(ej.tours_restants) - 1
+                if ej.tours_restants <= 0:
+                    ej.actif = False
+                    GainPassif.query.filter_by(
+                        evenement_id=ej.evenement_id,
+                        utilisateur_id=ej.utilisateur_id,
+                    ).delete()
+        db.session.commit()
+        if ejs:
+            logger.info("Tour évènements joueurs : %d lignes mises à jour.", len(ejs))
 
 
 def _ajouter_transaction_gain_passif(utilisateur_id, ressource, ressource_id, quantite, pa, motif="gain_passif"):
@@ -65,6 +93,18 @@ def _appliquer_gains_passifs(app):
             if key != cur_key:
                 prod = 0
                 cur_key = key
+
+            if getattr(gain, "evenement_id", None):
+                ej = EvenementJoueur.query.filter_by(
+                    evenement_id=gain.evenement_id,
+                    utilisateur_id=gain.utilisateur_id,
+                ).first()
+                if ej is None or not ej.actif:
+                    continue
+                if int(ej.delai_tours or 0) > 0:
+                    continue
+                if ej.tours_restants is not None and int(ej.tours_restants) <= 0:
+                    continue
 
             stock = Stock.query.filter_by(
                 utilisateur_id=gain.utilisateur_id,
@@ -127,13 +167,19 @@ def _appliquer_gains_passifs(app):
         logger.info("Tour gains passifs : %d entrées traitées.", len(gains))
 
 
+def _tour_semaine(app):
+    """Ordre : d’abord l’avancement des évènements (délai + durée), puis les gains passifs."""
+    _avancer_evenements_joueurs(app)
+    _appliquer_gains_passifs(app)
+
+
 def start_scheduler(app):
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(
-        func=_appliquer_gains_passifs,
+        func=_tour_semaine,
         args=[app],
         trigger=CronTrigger(day_of_week="wed,sat", hour=0, minute=0),
-        id="tour_gains_passifs",
+        id="tour_semaine",
         replace_existing=True,
     )
     scheduler.start()

@@ -10,6 +10,8 @@ from .utils.prix_snapshot import enregistrer_snapshot_prix
 
 def run_schema_updates():
     """Crée les nouvelles tables si besoin."""
+    from . import models as _models  # noqa: F401 — enregistre tous les modèles pour create_all
+
     db.create_all()
 
 
@@ -86,6 +88,19 @@ def migrate_gain_passif_delai_tours():
             text(
                 "ALTER TABLE gain_passif ADD COLUMN delai_tours INTEGER NOT NULL DEFAULT 0"
             )
+        )
+        db.session.commit()
+
+
+def migrate_gain_passif_evenement_id():
+    """Ajoute evenement_id sur gain_passif (lignes créées par les évènements)."""
+    insp = inspect(db.engine)
+    if "gain_passif" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("gain_passif")}
+    if "evenement_id" not in cols:
+        db.session.execute(
+            text("ALTER TABLE gain_passif ADD COLUMN evenement_id INTEGER")
         )
         db.session.commit()
 
@@ -187,3 +202,82 @@ def migrate_legacy_categories_string():
         db.session.commit()
     except Exception:
         db.session.rollback()
+
+
+def migrate_evenements_schema():
+    """
+    Colonnes évènements v2 (brouillon, cible, délais) + seed evenement_joueur.
+    `run_schema_updates()` crée les tables ; ici ALTER pour bases existantes.
+    """
+    from .models import Evenement, EvenementJoueur, Utilisateur
+
+    insp = inspect(db.engine)
+    if "evenement" not in insp.get_table_names():
+        return
+
+    cols = {c["name"] for c in insp.get_columns("evenement")}
+    added_brouillon = False
+    if "brouillon" not in cols:
+        db.session.execute(text("ALTER TABLE evenement ADD COLUMN brouillon BOOLEAN NOT NULL DEFAULT 1"))
+        db.session.commit()
+        added_brouillon = True
+        cols = {c["name"] for c in inspect(db.engine).get_columns("evenement")}
+    if "cible" not in cols:
+        db.session.execute(text("ALTER TABLE evenement ADD COLUMN cible VARCHAR(20) NOT NULL DEFAULT 'aucun'"))
+        db.session.commit()
+        cols = {c["name"] for c in inspect(db.engine).get_columns("evenement")}
+    if "cible_utilisateur_ids" not in cols:
+        db.session.execute(text("ALTER TABLE evenement ADD COLUMN cible_utilisateur_ids TEXT NOT NULL DEFAULT '[]'"))
+        db.session.commit()
+        cols = {c["name"] for c in inspect(db.engine).get_columns("evenement")}
+    if "delai_tours" not in cols:
+        db.session.execute(text("ALTER TABLE evenement ADD COLUMN delai_tours INTEGER NOT NULL DEFAULT 0"))
+        db.session.commit()
+        cols = {c["name"] for c in inspect(db.engine).get_columns("evenement")}
+    if "tours_restants" not in cols:
+        db.session.execute(text("ALTER TABLE evenement ADD COLUMN tours_restants INTEGER"))
+        db.session.commit()
+
+    cols = {c["name"] for c in inspect(db.engine).get_columns("evenement")}
+    if "deja_publie" not in cols:
+        db.session.execute(text("ALTER TABLE evenement ADD COLUMN deja_publie BOOLEAN NOT NULL DEFAULT 0"))
+        db.session.commit()
+        try:
+            db.session.execute(
+                text(
+                    "UPDATE evenement SET deja_publie = 1 "
+                    "WHERE brouillon = 0 OR id IN (SELECT DISTINCT evenement_id FROM evenement_joueur)"
+                )
+            )
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    if added_brouillon:
+        try:
+            db.session.execute(text("UPDATE evenement SET brouillon = 0, cible = 'tous' WHERE actif = 1"))
+            db.session.execute(text("UPDATE evenement SET cible = 'aucun' WHERE actif = 0"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    insp2 = inspect(db.engine)
+    if "evenement_joueur" not in insp2.get_table_names():
+        return
+
+    for e in Evenement.query.filter(Evenement.actif.is_(True), Evenement.brouillon.is_(False)).all():
+        if EvenementJoueur.query.filter_by(evenement_id=e.id).count() > 0:
+            continue
+        d = int(getattr(e, "delai_tours", 0) or 0)
+        tr = getattr(e, "tours_restants", None)
+        for u in Utilisateur.query.filter_by(is_mj=False).all():
+            db.session.add(
+                EvenementJoueur(
+                    evenement_id=e.id,
+                    utilisateur_id=u.id,
+                    delai_tours=d,
+                    tours_restants=tr,
+                    actif=True,
+                )
+            )
+        db.session.commit()
